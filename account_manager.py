@@ -23,7 +23,7 @@ from PySide6.QtGui import QAction, QIcon, QFont, QColor, QPalette, QLinearGradie
 from icon_helper import load_svg_icon, AppIcons
 
 # ============================================================
-# Cáº¤U HÃŒNH
+# CẤU HÌNH
 # ============================================================
 API_URL = "https://account-api.bandainamcoid.com/"
 LOGIN_URL = "https://account.bandainamcoid.com/login.html"
@@ -83,16 +83,16 @@ def fetch_member_profile(session, headers):
     profile = {}
 
     def read_after(label):
-        match = re.search(re.escape(label) + r'\s*[:ï¼š]?\s*([^|]{1,100}?)(?=\s+(?:æ°å|ãƒ‹ãƒƒã‚¯ãƒãƒ¼ãƒ |ç”Ÿå¹´æœˆæ—¥|æ€§åˆ¥|ãƒ¡ãƒ¼ãƒ«ã‚¢ãƒ‰ãƒ¬ã‚¹|ãƒãƒ³ãƒ€ã‚¤ãƒŠãƒ ã‚³ID|ãƒã‚¤ãƒ³ãƒˆè¦ç´„|éƒµä¾¿ç•ªå·|éƒ½é“åºœçœŒ|å¸‚åŒºç”ºæ‘|ä¸ç›®ãƒ»ç•ªåœ°|ãƒ“ãƒ«ãƒ»ãƒžãƒ³ã‚·ãƒ§ãƒ³å|é›»è©±ç•ªå·|â– |ç¾åœ¨ã®ãƒã‚¤ãƒ³ãƒˆ)|$)', text)
+        match = re.search(re.escape(label) + r'\s*[:：]?\s*([^|]{1,100}?)(?=\s+(?:氏名|ニックネーム|生年月日|性別|メールアドレス|バンダイナムコID|ポイント規約|郵便番号|都道府県|市区町村|丁目・番地|ビル・マンション名|電話番号|■|現在のポイント)|$)', text)
         return match.group(1).strip() if match else ""
 
-    name = read_after("æ°åï¼ˆæ¼¢å­—ï¼‰")
+    name = read_after("氏名（漢字）")
     name_parts = name.split()
     if name_parts:
         profile["last_name_kanji"] = name_parts[0]
         if len(name_parts) > 1:
             profile["first_name_kanji"] = " ".join(name_parts[1:])
-    name = read_after("æ°åï¼ˆã‚«ãƒŠï¼‰")
+    name = read_after("氏名（カナ）")
     name_parts = name.split()
     if name_parts:
         profile["last_name_kana"] = name_parts[0]
@@ -100,17 +100,17 @@ def fetch_member_profile(session, headers):
             profile["first_name_kana"] = " ".join(name_parts[1:])
 
     labels = {
-        "ãƒ‹ãƒƒã‚¯ãƒãƒ¼ãƒ ": "nickname", "ç”Ÿå¹´æœˆæ—¥": "dob", "æ€§åˆ¥": "gender",
-        "ãƒ¡ãƒ¼ãƒ«ã‚¢ãƒ‰ãƒ¬ã‚¹": "email", "éƒµä¾¿ç•ªå·": "postal_code",
-        "éƒ½é“åºœçœŒ": "prefecture", "å¸‚åŒºç”ºæ‘": "city", "ä¸ç›®ãƒ»ç•ªåœ°": "address_number",
-        "ãƒ“ãƒ«ãƒ»ãƒžãƒ³ã‚·ãƒ§ãƒ³åãƒ»": "building", "é›»è©±ç•ªå·": "phone",
-        "ç¾åœ¨ã®ãƒã‚¤ãƒ³ãƒˆ": "current_points", "ãƒãƒ³ãƒ€ã‚¤ãƒŠãƒ ã‚³ID": "bandai_namco_id_status",
-        "ãƒã‚¤ãƒ³ãƒˆè¦ç´„": "points_terms_status",
+        "ニックネーム": "nickname", "生年月日": "dob", "性別": "gender",
+        "メールアドレス": "email", "郵便番号": "postal_code",
+        "都道府県": "prefecture", "市区町村": "city", "丁目・番地": "address_number",
+        "ビル・マンション名・": "building", "電話番号": "phone",
+        "現在のポイント": "current_points", "バンダイナムコID": "bandai_namco_id_status",
+        "ポイント規約": "points_terms_status",
     }
     for label, key in labels.items():
         value = read_after(label)
         if key == "building":
-            value = re.sub(r'^éƒ¨å±‹ç•ªå·\s*', '', value)
+            value = re.sub(r'^部屋番号\s*', '', value)
         if value:
             profile[key] = value
     if profile:
@@ -151,10 +151,10 @@ def inspect_login_handoff(session, headers, redirect_url, language):
     return result
 
 # ============================================================
-# WORKER THREAD CHO ÄÄ‚NG NHáº¬P
+# WORKER THREAD CHO ĐĂNG NHẬP
 # ============================================================
 class LoginWorker(QThread):
-    """Thread thá»±c hiá»‡n Ä‘Äƒng nháº­p Ä‘á»ƒ khÃ´ng block UI"""
+    """Thread thực hiện đăng nhập để không block UI"""
     result_ready = Signal(str, bool, str)  # email, success, message
     profile_ready = Signal(str, dict)
     progress = Signal(int)
@@ -180,7 +180,7 @@ class LoginWorker(QThread):
 
             self.progress.emit(30)
             
-            # Láº¥y cookies
+            # Lấy cookies
             login_params = {
                 "client_id": CLIENT_ID,
                 "redirect_uri": REDIRECT_URI,
@@ -190,7 +190,7 @@ class LoginWorker(QThread):
 
             self.progress.emit(50)
             
-            # ÄÄƒng nháº­p
+            # Đăng nhập
             env_info = json.dumps({
                 "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "lang": language,
@@ -238,27 +238,27 @@ class LoginWorker(QThread):
                 profile.setdefault("status", "Chua kiem tra")
                 profile.setdefault("last_check", None)
                 self.profile_ready.emit(self.email, profile)
-                profile.setdefault("status", "ChÆ°a kiá»ƒm tra")
+                profile.setdefault("status", "Chưa kiểm tra")
                 profile.setdefault("last_check", None)
-                self.result_ready.emit(self.email, True, "ÄÄƒng nháº­p thÃ nh cÃ´ng")
+                self.result_ready.emit(self.email, True, "Đăng nhập thành công")
             else:
-                error_msg = response_data.get("msg", "Lá»—i khÃ´ng xÃ¡c Ä‘á»‹nh")
-                self.result_ready.emit(self.email, False, f"ÄÄƒng nháº­p tháº¥t báº¡i: {error_msg}")
+                error_msg = response_data.get("msg", "Lỗi không xác định")
+                self.result_ready.emit(self.email, False, f"Đăng nhập thất bại: {error_msg}")
             
             self.progress.emit(100)
             
         except Exception as e:
-            self.result_ready.emit(self.email, False, f"Lá»—i: {str(e)}")
+            self.result_ready.emit(self.email, False, f"Lỗi: {str(e)}")
 
     def stop(self):
         self._is_running = False
         self.wait()
 
 # ============================================================
-# WORKER THREAD CHO KIá»‚M TRA NHIá»€U TÃ€I KHOáº¢N
+# WORKER THREAD CHO KIỂM TRA NHIỀU TÀI KHOẢN
 # ============================================================
 class BatchCheckWorker(QThread):
-    """Thread kiá»ƒm tra nhiá»u tÃ i khoáº£n cÃ¹ng lÃºc"""
+    """Thread kiểm tra nhiều tài khoản cùng lúc"""
     result_ready = Signal(str, bool, str)  # email, success, message
     progress = Signal(int, int)  # current, total
     finished_checking = Signal()
@@ -325,15 +325,15 @@ class BatchCheckWorker(QThread):
                 response_data = response.json()
                 
                 if response_data.get("result") == "OK":
-                    self.result_ready.emit(email, True, "âœ“ Hoáº¡t Ä‘á»™ng")
+                    self.result_ready.emit(email, True, "✓ Hoạt động")
                 else:
-                    error_msg = response_data.get("msg", "Lá»—i")
-                    self.result_ready.emit(email, False, f"âœ— {error_msg}")
+                    error_msg = response_data.get("msg", "Lỗi")
+                    self.result_ready.emit(email, False, f"✗ {error_msg}")
                 
             except Exception as e:
-                self.result_ready.emit(email, False, f"âœ— Lá»—i: {str(e)}")
+                self.result_ready.emit(email, False, f"✗ Lỗi: {str(e)}")
             
-            # Delay nhá» Ä‘á»ƒ trÃ¡nh bá»‹ block
+            # Delay nhỏ để tránh bị block
             time.sleep(0.5)
         
         self.finished_checking.emit()
@@ -343,12 +343,12 @@ class BatchCheckWorker(QThread):
         self.wait()
 
 # ============================================================
-# DIALOG THÃŠM TÃ€I KHOáº¢N
+# DIALOG THÊM TÀI KHOẢN
 # ============================================================
 class AddAccountDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("ThÃªm tÃ i khoáº£n")
+        self.setWindowTitle("Thêm tài khoản")
         self.setMinimumWidth(500)
         self.setup_ui()
 
@@ -361,77 +361,77 @@ class AddAccountDialog(QDialog):
         self.email_input.setPlaceholderText("email@example.com")
         layout.addRow("Email:", self.email_input)
         
-        # Máº­t kháº©u
+        # Mật khẩu
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password_input.setPlaceholderText("â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢")
-        layout.addRow("Máº­t kháº©u:", self.password_input)
+        self.password_input.setPlaceholderText("••••••••")
+        layout.addRow("Mật khẩu:", self.password_input)
         
-        self.show_password = QCheckBox("Hiá»‡n máº­t kháº©u")
+        self.show_password = QCheckBox("Hiện mật khẩu")
         self.show_password.toggled.connect(self.toggle_password_visibility)
         layout.addRow("", self.show_password)
         
-        # Há» (Kanji)
+        # Họ (Kanji)
         self.last_name_input = QLineEdit()
-        self.last_name_input.setPlaceholderText("Há» (Kanji) - báº¯t buá»™c")
-        layout.addRow("Há» (Kanji) *:", self.last_name_input)
+        self.last_name_input.setPlaceholderText("Họ (Kanji) - bắt buộc")
+        layout.addRow("Họ (Kanji) *:", self.last_name_input)
         
-        # TÃªn (Kanji) - First name in Kanji
+        # Tên (Kanji) - First name in Kanji
         self.first_name_input = QLineEdit()
-        self.first_name_input.setPlaceholderText("TÃªn (Kanji)")
-        layout.addRow("TÃªn (Kanji):", self.first_name_input)
+        self.first_name_input.setPlaceholderText("Tên (Kanji)")
+        layout.addRow("Tên (Kanji):", self.first_name_input)
         
-        # Há» (Katakana)
+        # Họ (Katakana)
         self.last_kana_input = QLineEdit()
-        self.last_kana_input.setPlaceholderText("Há» (Katakana)")
-        layout.addRow("Há» (Katakana):", self.last_kana_input)
+        self.last_kana_input.setPlaceholderText("Họ (Katakana)")
+        layout.addRow("Họ (Katakana):", self.last_kana_input)
         
-        # TÃªn (Katakana)
+        # Tên (Katakana)
         self.first_kana_input = QLineEdit()
-        self.first_kana_input.setPlaceholderText("TÃªn (Katakana)")
-        layout.addRow("TÃªn (Katakana):", self.first_kana_input)
+        self.first_kana_input.setPlaceholderText("Tên (Katakana)")
+        layout.addRow("Tên (Katakana):", self.first_kana_input)
         
-        # Biá»‡t danh
+        # Biệt danh
         self.nickname_input = QLineEdit()
-        self.nickname_input.setPlaceholderText("Biá»‡t danh")
-        layout.addRow("Biá»‡t danh:", self.nickname_input)
+        self.nickname_input.setPlaceholderText("Biệt danh")
+        layout.addRow("Biệt danh:", self.nickname_input)
         
-        # NgÃ y sinh
+        # Ngày sinh
         self.dob_input = QLineEdit()
         self.dob_input.setPlaceholderText("DD/MM/YYYY")
-        layout.addRow("NgÃ y sinh:", self.dob_input)
+        layout.addRow("Ngày sinh:", self.dob_input)
         
-        # Giá»›i tÃ­nh
+        # Giới tính
         self.gender_combo = QComboBox()
-        self.gender_combo.addItems(["", "Nam", "Ná»¯", "KhÃ¡c"])
-        layout.addRow("Giá»›i tÃ­nh:", self.gender_combo)
+        self.gender_combo.addItems(["", "Nam", "Nữ", "Khác"])
+        layout.addRow("Giới tính:", self.gender_combo)
         
-        # MÃ£ bÆ°u Ä‘iá»‡n
+        # Mã bưu điện
         self.postal_code_input = QLineEdit()
         self.postal_code_input.setPlaceholderText("8618006")
-        layout.addRow("MÃ£ bÆ°u Ä‘iá»‡n:", self.postal_code_input)
+        layout.addRow("Mã bưu điện:", self.postal_code_input)
         
-        # Tá»‰nh
+        # Tỉnh
         self.prefecture_input = QLineEdit()
-        self.prefecture_input.setPlaceholderText("Tá»‰nh Kumamoto")
-        layout.addRow("Tá»‰nh:", self.prefecture_input)
+        self.prefecture_input.setPlaceholderText("Tỉnh Kumamoto")
+        layout.addRow("Tỉnh:", self.prefecture_input)
         
-        # ÄÃ´ thá»‹/Quáº­n/Huyá»‡n
+        # Đô thị/Quận/Huyện
         self.city_input = QLineEdit()
-        self.city_input.setPlaceholderText("ç†Šæœ¬å¸‚åŒ—åŒºé¾ç”°")
-        layout.addRow("ÄÃ´ thá»‹/Quáº­n:", self.city_input)
+        self.city_input.setPlaceholderText("熊本市北区龍田")
+        layout.addRow("Đô thị/Quận:", self.city_input)
         
-        # Sá»‘ nhÃ /Äá»‹a chá»‰ chi tiáº¿t
+        # Số nhà/Địa chỉ chi tiết
         self.address_input = QLineEdit()
-        self.address_input.setPlaceholderText("8ä¸ç›® 3-303å·")
-        layout.addRow("Sá»‘ nhÃ /Äá»‹a chá»‰:", self.address_input)
+        self.address_input.setPlaceholderText("8丁目 3-303号")
+        layout.addRow("Số nhà/Địa chỉ:", self.address_input)
         
-        # Sá»‘ Ä‘iá»‡n thoáº¡i
+        # Số điện thoại
         self.phone_input = QLineEdit()
         self.phone_input.setPlaceholderText("09012345678")
-        layout.addRow("Sá»‘ Ä‘iá»‡n thoáº¡i:", self.phone_input)
+        layout.addRow("Số điện thoại:", self.phone_input)
         
-        # NÃºt
+        # Nút
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
         )
@@ -465,12 +465,12 @@ class AddAccountDialog(QDialog):
 
 
 # ============================================================
-# DIALOG Äá»”I TÃŠN - Chá»‰ Ä‘á»•i TÃªn (Kanji)
+# DIALOG ĐỔI TÊN - Chỉ đổi Tên (Kanji)
 # ============================================================
 class ChangeNameDialog(QDialog):
     def __init__(self, parent=None, current_first_name=""):
         super().__init__(parent)
-        self.setWindowTitle("Äá»•i TÃªn (Kanji)")
+        self.setWindowTitle("Đổi Tên (Kanji)")
         self.setMinimumWidth(400)
         self.current_first_name = current_first_name
         self.setup_ui()
@@ -479,19 +479,19 @@ class ChangeNameDialog(QDialog):
         layout = QFormLayout(self)
         layout.setVerticalSpacing(12)
         
-        # ThÃ´ng tin hiá»‡n táº¡i
-        info_label = QLabel(f"TÃªn hiá»‡n táº¡i (Kanji): {self.current_first_name}")
+        # Thông tin hiện tại
+        info_label = QLabel(f"Tên hiện tại (Kanji): {self.current_first_name}")
         info_label.setStyleSheet("color: #666; font-size: 11px; padding: 10px; background-color: #f8f9fa; border-radius: 4px;")
         layout.addRow(info_label)
         
         layout.addRow("", QLabel(""))  # Spacer
         
-        # Chá»‰ cho phÃ©p Ä‘á»•i TÃªn (Kanji)
+        # Chỉ cho phép đổi Tên (Kanji)
         self.first_name_input = QLineEdit(self.current_first_name)
-        self.first_name_input.setPlaceholderText("TÃªn má»›i (Kanji)")
-        layout.addRow("TÃªn má»›i (Kanji) *:", self.first_name_input)
+        self.first_name_input.setPlaceholderText("Tên mới (Kanji)")
+        layout.addRow("Tên mới (Kanji) *:", self.first_name_input)
         
-        # NÃºt
+        # Nút
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
         )
@@ -506,10 +506,10 @@ class ChangeNameDialog(QDialog):
 
 
 # ============================================================
-# WORKER THREAD CHO Äá»”I TÃŠN
+# WORKER THREAD CHO ĐỔI TÊN
 # ============================================================
 class ChangeNameWorker(QThread):
-    """Thread thá»±c hiá»‡n Ä‘á»•i tÃªn Ä‘á»ƒ khÃ´ng block UI"""
+    """Thread thực hiện đổi tên để không block UI"""
     result_ready = Signal(str, bool, str)  # email, success, message
     progress = Signal(int)
 
@@ -530,18 +530,18 @@ class ChangeNameWorker(QThread):
             result = change_name(
                 email=self.email,
                 password=self.password,
-                new_last_name="",  # KhÃ´ng Ä‘á»•i há»
+                new_last_name="",  # Không đổi họ
                 new_first_name=self.name_data.get("first_name", ""),
-                new_last_kana="",  # KhÃ´ng Ä‘á»•i há» kana
-                new_first_kana="",  # KhÃ´ng Ä‘á»•i tÃªn kana
-                new_nickname=""     # KhÃ´ng Ä‘á»•i nickname
+                new_last_kana="",  # Không đổi họ kana
+                new_first_kana="",  # Không đổi tên kana
+                new_nickname=""     # Không đổi nickname
             )
             
             self.progress.emit(100)
             self.result_ready.emit(self.email, result["success"], result["message"])
             
         except Exception as e:
-            self.result_ready.emit(self.email, False, f"Lá»—i: {str(e)}")
+            self.result_ready.emit(self.email, False, f"Lỗi: {str(e)}")
 
     def stop(self):
         self._is_running = False
@@ -554,20 +554,20 @@ class AccountDetailsDialog(QDialog):
     """Display saved profile data; only the Kanji given name is editable."""
     FIELDS = [
         ("email", "Email"), ("password", "Password"),
-        ("last_name_kanji", "Há» (Kanji)"), ("first_name_kanji", "TÃªn (Kanji)"),
-        ("last_name_kana", "Há» (Kana)"), ("first_name_kana", "TÃªn (Kana)"),
-        ("nickname", "Nickname"), ("dob", "NgÃ y sinh"), ("gender", "Giá»›i tÃ­nh"),
-        ("postal_code", "MÃ£ bÆ°u Ä‘iá»‡n"), ("prefecture", "Tá»‰nh"), ("city", "ThÃ nh phá»‘"),
-        ("address_number", "Äá»‹a chá»‰"), ("building", "TÃ²a nhÃ "), ("phone", "Äiá»‡n thoáº¡i"),
-        ("current_points", "Äiá»ƒm hiá»‡n táº¡i"), ("bandai_namco_id_status", "Bandai Namco ID"),
-        ("points_terms_status", "Äiá»u khoáº£n Ä‘iá»ƒm"),
-        ("profile_fetch_status", "Tráº¡ng thÃ¡i láº¥y há»“ sÆ¡"), ("gender_code", "MÃ£ giá»›i tÃ­nh"),
-        ("status", "Tráº¡ng thÃ¡i"), ("last_check", "Kiá»ƒm tra láº§n cuá»‘i"),
+        ("last_name_kanji", "Họ (Kanji)"), ("first_name_kanji", "Tên (Kanji)"),
+        ("last_name_kana", "Họ (Kana)"), ("first_name_kana", "Tên (Kana)"),
+        ("nickname", "Nickname"), ("dob", "Ngày sinh"), ("gender", "Giới tính"),
+        ("postal_code", "Mã bưu điện"), ("prefecture", "Tỉnh"), ("city", "Thành phố"),
+        ("address_number", "Địa chỉ"), ("building", "Tòa nhà"), ("phone", "Điện thoại"),
+        ("current_points", "Điểm hiện tại"), ("bandai_namco_id_status", "Bandai Namco ID"),
+        ("points_terms_status", "Điều khoản điểm"),
+        ("profile_fetch_status", "Trạng thái lấy hồ sơ"), ("gender_code", "Mã giới tính"),
+        ("status", "Trạng thái"), ("last_check", "Kiểm tra lần cuối"),
     ]
 
     def __init__(self, account, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("ThÃ´ng tin tÃ i khoáº£n")
+        self.setWindowTitle("Thông tin tài khoản")
         self.setMinimumWidth(520)
         self.inputs = {}
         layout = QFormLayout(self)
@@ -578,7 +578,7 @@ class AccountDetailsDialog(QDialog):
             if key == "password":
                 field.setEchoMode(QLineEdit.EchoMode.Password)
             if key == "first_name_kanji":
-                field.setPlaceholderText("Chá»‰ trÆ°á»ng nÃ y cÃ³ thá»ƒ chá»‰nh sá»­a")
+                field.setPlaceholderText("Chỉ trường này có thể chỉnh sửa")
             self.inputs[key] = field
             layout.addRow(label + ":", field)
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -596,7 +596,7 @@ class AccountManager(QMainWindow):
         self.setWindowTitle("NAMCO Account Manager")
         self.setMinimumSize(1400, 800)
         
-        # Dá»¯ liá»‡u
+        # Dữ liệu
         self.accounts = []  # List of dict with all account fields
         self.workers = []
         self.pending_name_changes = {}
@@ -632,7 +632,7 @@ class AccountManager(QMainWindow):
         if isinstance(log_label, QLabel):
             input_layout.removeWidget(log_label)
             log_label.deleteLater()
-        self.tab_widget.addTab(self.input_tab, load_svg_icon(AppIcons.PLUS, 16), "Nháº­p tÃ i khoáº£n")
+        self.tab_widget.addTab(self.input_tab, load_svg_icon(AppIcons.PLUS, 16), "Nhập tài khoản")
 
         self.list_tab = QWidget()
         list_layout = QHBoxLayout(self.list_tab)
@@ -641,17 +641,17 @@ class AccountManager(QMainWindow):
         list_layout.addWidget(self.create_right_panel(), 3)
         log_panel = QFrame()
         log_layout = QVBoxLayout(log_panel)
-        log_layout.addWidget(QLabel("Nháº­t kÃ½"))
+        log_layout.addWidget(QLabel("Nhật ký"))
         self.log_text.show()
         self.log_text.setMinimumWidth(260)
         self.log_text.setMaximumHeight(16777215)
         log_layout.addWidget(self.log_text)
         list_layout.addWidget(log_panel, 1)
-        self.tab_widget.addTab(self.list_tab, load_svg_icon(AppIcons.FOLDER_OPEN, 16), "Danh sÃ¡ch tÃ i khoáº£n")
+        self.tab_widget.addTab(self.list_tab, load_svg_icon(AppIcons.FOLDER_OPEN, 16), "Danh sách tài khoản")
         # Status Bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Sáºµn sÃ ng")
+        self.status_bar.showMessage("Sẵn sàng")
 
     def create_toolbar(self):
         self.toolbar = QToolBar()
@@ -667,7 +667,7 @@ class AccountManager(QMainWindow):
         self.toolbar.addSeparator()
         
         # Add Account Button
-        add_btn = QPushButton(" ThÃªm tÃ i khoáº£n")
+        add_btn = QPushButton(" Thêm tài khoản")
         add_btn.setIcon(load_svg_icon(AppIcons.PLUS, 20, "white"))
         add_btn.clicked.connect(self.add_account)
         add_btn.setStyleSheet("""
@@ -700,7 +700,7 @@ class AccountManager(QMainWindow):
         self.toolbar.addWidget(import_btn)
         
         # Check All Button
-        check_btn = QPushButton(" Kiá»ƒm tra táº¥t cáº£")
+        check_btn = QPushButton(" Kiểm tra tất cả")
         check_btn.setIcon(load_svg_icon(AppIcons.CHECK, 20, "white"))
         check_btn.clicked.connect(self.check_all_accounts)
         check_btn.setStyleSheet("""
@@ -716,7 +716,7 @@ class AccountManager(QMainWindow):
         self.toolbar.addWidget(check_btn)
         
         # Delete Selected Button
-        delete_btn = QPushButton(" XÃ³a Ä‘Ã£ chá»n")
+        delete_btn = QPushButton(" Xóa đã chọn")
         delete_btn.setIcon(load_svg_icon(AppIcons.TRASH, 20, "white"))
         delete_btn.clicked.connect(self.delete_selected)
         delete_btn.setStyleSheet("""
@@ -737,7 +737,7 @@ class AccountManager(QMainWindow):
         self.toolbar.addWidget(spacer)
         
         # Stats
-        self.stats_label = QLabel("0 tÃ i khoáº£n")
+        self.stats_label = QLabel("0 tài khoản")
         self.stats_label.setStyleSheet("color: #666; font-size: 14px;")
         self.toolbar.addWidget(self.stats_label)
 
@@ -756,12 +756,12 @@ class AccountManager(QMainWindow):
         layout.setSpacing(15)
         
         # Title
-        title = QLabel("Nháº­p tÃ i khoáº£n")
+        title = QLabel("Nhập tài khoản")
         title.setStyleSheet("font-size: 16px; font-weight: bold; color: #333;")
         layout.addWidget(title)
         
         # Format hint
-        hint = QLabel("Äá»‹nh dáº¡ng: email|má»Ÿi dÃ²ng 1 tÃ i khoáº£n")
+        hint = QLabel("Định dạng: email|mởi dòng 1 tài khoản")
         hint.setStyleSheet("color: #666; font-size: 12px;")
         layout.addWidget(hint)
         
@@ -782,7 +782,7 @@ class AccountManager(QMainWindow):
         # Buttons
         btn_layout = QHBoxLayout()
         
-        add_btn = QPushButton(" ThÃªm vÃ o danh sÃ¡ch")
+        add_btn = QPushButton(" Thêm vào danh sách")
         add_btn.setIcon(load_svg_icon(AppIcons.PLUS, 18))
         add_btn.clicked.connect(self.add_from_text)
         add_btn.setStyleSheet("""
@@ -798,7 +798,7 @@ class AccountManager(QMainWindow):
         """)
         btn_layout.addWidget(add_btn)
         
-        clear_btn = QPushButton(" XÃ³a")
+        clear_btn = QPushButton(" Xóa")
         clear_btn.setIcon(load_svg_icon(AppIcons.X, 18))
         clear_btn.clicked.connect(self.text_input.clear)
         clear_btn.setStyleSheet("""
@@ -816,7 +816,7 @@ class AccountManager(QMainWindow):
         layout.addLayout(btn_layout)
         
         # Quick Actions
-        actions_group = QGroupBox("Thao tÃ¡c nhanh")
+        actions_group = QGroupBox("Thao tác nhanh")
         actions_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -834,13 +834,13 @@ class AccountManager(QMainWindow):
         actions_layout = QVBoxLayout(actions_group)
         
         # Check single account
-        check_single_btn = QPushButton(" Kiá»ƒm tra tÃ i khoáº£n Ä‘áº§u tiÃªn")
+        check_single_btn = QPushButton(" Kiểm tra tài khoản đầu tiên")
         check_single_btn.setIcon(load_svg_icon(AppIcons.CHECK, 18))
         check_single_btn.clicked.connect(self.check_first_account)
         actions_layout.addWidget(check_single_btn)
         
         # Export
-        export_btn = QPushButton(" Export danh sÃ¡ch")
+        export_btn = QPushButton(" Export danh sách")
         export_btn.setIcon(load_svg_icon(AppIcons.DOWNLOAD, 18))
         export_btn.clicked.connect(self.export_accounts)
         actions_layout.addWidget(export_btn)
@@ -853,7 +853,7 @@ class AccountManager(QMainWindow):
         layout.addWidget(self.progress_bar)
         
         # Log
-        log_label = QLabel("Nháº­t kÃ½:")
+        log_label = QLabel("Nhật ký:")
         log_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
         layout.addWidget(log_label)
         
@@ -891,7 +891,7 @@ class AccountManager(QMainWindow):
         layout.setSpacing(15)
         
         # Title
-        title = QLabel("Danh sÃ¡ch tÃ i khoáº£n")
+        title = QLabel("Danh sách tài khoản")
         title.setStyleSheet("font-size: 16px; font-weight: bold; color: #333;")
         layout.addWidget(title)
         
@@ -899,7 +899,7 @@ class AccountManager(QMainWindow):
         self.table = QTableWidget()
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels([
-            "STT", "Email", "Máº­t kháº©u", "Tráº¡ng thÃ¡i", "Kiá»ƒm tra láº§n cuá»‘i"
+            "STT", "Email", "Mật khẩu", "Trạng thái", "Kiểm tra lần cuối"
         ])
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
@@ -955,11 +955,11 @@ class AccountManager(QMainWindow):
         
         # Filter
         filter_layout = QHBoxLayout()
-        filter_label = QLabel("Lá»c:")
+        filter_label = QLabel("Lọc:")
         filter_layout.addWidget(filter_label)
         
         self.filter_combo = QComboBox()
-        self.filter_combo.addItems(["Táº¥t cáº£", "Hoáº¡t Ä‘á»™ng", "KhÃ´ng hoáº¡t Ä‘á»™ng", "ChÆ°a kiá»ƒm tra"])
+        self.filter_combo.addItems(["Tất cả", "Hoạt động", "Không hoạt động", "Chưa kiểm tra"])
         self.filter_combo.currentTextChanged.connect(self.apply_filter)
         filter_layout.addWidget(self.filter_combo)
         
@@ -967,7 +967,7 @@ class AccountManager(QMainWindow):
         
         # Search
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("TÃ¬m kiáº¿m email...")
+        self.search_input.setPlaceholderText("Tìm kiếm email...")
         self.search_input.textChanged.connect(self.apply_filter)
         filter_layout.addWidget(self.search_input)
         
@@ -1014,18 +1014,18 @@ class AccountManager(QMainWindow):
             try:
                 with open(DATA_FILE, 'r', encoding='utf-8') as f:
                     self.accounts = json.load(f)
-                self.log(f"ÄÃ£ táº£i {len(self.accounts)} tÃ i khoáº£n tá»« file")
+                self.log(f"Đã tải {len(self.accounts)} tài khoản từ file")
                 self.update_table()
             except Exception as e:
-                self.log(f"Lá»—i táº£i dá»¯ liá»‡u: {e}")
+                self.log(f"Lỗi tải dữ liệu: {e}")
 
     def save_data(self):
         try:
             with open(DATA_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.accounts, f, ensure_ascii=False, indent=2)
-            self.log(f"ÄÃ£ lÆ°u {len(self.accounts)} tÃ i khoáº£n")
+            self.log(f"Đã lưu {len(self.accounts)} tài khoản")
         except Exception as e:
-            self.log(f"Lá»—i lÆ°u dá»¯ liá»‡u: {e}")
+            self.log(f"Lỗi lưu dữ liệu: {e}")
 
     # ============================================================
     # ACCOUNT OPERATIONS
@@ -1036,14 +1036,14 @@ class AccountManager(QMainWindow):
             email, password = dialog.get_data()
             if email and password:
                 if self.add_single_account(email, password):
-                    self.log(f"ÄÃ£ thÃªm: {email}")
+                    self.log(f"Đã thêm: {email}")
                     self.update_table()
                     self.save_data()
 
     def add_from_text(self):
         text = self.text_input.toPlainText().strip()
         if not text:
-            QMessageBox.warning(self, "Cáº£nh bÃ¡o", "Vui lÃ²ng nháº­p dá»¯ liá»‡u!")
+            QMessageBox.warning(self, "Cảnh báo", "Vui lòng nhập dữ liệu!")
             return
         
         lines = text.split('\n')
@@ -1066,17 +1066,17 @@ class AccountManager(QMainWindow):
             else:
                 skipped += 1
         
-        self.log(f"ThÃªm: {added} | Bá» qua (trÃ¹ng): {skipped}")
+        self.log(f"Thêm: {added} | Bỏ qua (trùng): {skipped}")
         self.update_table()
         self.save_data()
         
         QMessageBox.information(
-            self, "HoÃ n táº¥t",
-            f"ÄÃ£ thÃªm: {added} tÃ i khoáº£n\nBá» qua (trÃ¹ng): {skipped} tÃ i khoáº£n"
+            self, "Hoàn tất",
+            f"Đã thêm: {added} tài khoản\nBỏ qua (trùng): {skipped} tài khoản"
         )
 
     def add_single_account(self, email, password):
-        # Kiá»ƒm tra trÃ¹ng láº·p
+        # Kiểm tra trùng lặp
         for acc in self.accounts:
             if acc['email'] == email:
                 return False
@@ -1084,14 +1084,14 @@ class AccountManager(QMainWindow):
         self.accounts.append({
             'email': email,
             'password': password,
-            'status': 'ChÆ°a kiá»ƒm tra',
+            'status': 'Chưa kiểm tra',
             'last_check': None
         })
         return True
 
     def import_from_txt(self):
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Chá»n file TXT", "", "Text Files (*.txt);;All Files (*)"
+            self, "Chọn file TXT", "", "Text Files (*.txt);;All Files (*)"
         )
         
         if not file_path:
@@ -1120,17 +1120,17 @@ class AccountManager(QMainWindow):
                 else:
                     skipped += 1
             
-            self.log(f"Import: +{added} | Bá» qua: {skipped}")
+            self.log(f"Import: +{added} | Bỏ qua: {skipped}")
             self.update_table()
             self.save_data()
             
             QMessageBox.information(
-                self, "Import hoÃ n táº¥t",
-                f"ÄÃ£ thÃªm: {added} tÃ i khoáº£n\nBá» qua (trÃ¹ng): {skipped} tÃ i khoáº£n"
+                self, "Import hoàn tất",
+                f"Đã thêm: {added} tài khoản\nBỏ qua (trùng): {skipped} tài khoản"
             )
             
         except Exception as e:
-            QMessageBox.critical(self, "Lá»—i", f"KhÃ´ng thá»ƒ Ä‘á»c file: {e}")
+            QMessageBox.critical(self, "Lỗi", f"Không thể đọc file: {e}")
 
     def delete_selected(self):
         selected_rows = set()
@@ -1138,52 +1138,52 @@ class AccountManager(QMainWindow):
             selected_rows.add(item.row())
         
         if not selected_rows:
-            QMessageBox.warning(self, "Cáº£nh bÃ¡o", "Vui lÃ²ng chá»n tÃ i khoáº£n cáº§n xÃ³a!")
+            QMessageBox.warning(self, "Cảnh báo", "Vui lòng chọn tài khoản cần xóa!")
             return
         
         reply = QMessageBox.question(
-            self, "XÃ¡c nháº­n",
-            f"Báº¡n cÃ³ cháº¯c muá»‘n xÃ³a {len(selected_rows)} tÃ i khoáº£n Ä‘Ã£ chá»n?",
+            self, "Xác nhận",
+            f"Bạn có chắc muốn xóa {len(selected_rows)} tài khoản đã chọn?",
             QMessageBox.Yes | QMessageBox.No
         )
         
         if reply == QMessageBox.Yes:
-            # XÃ³a tá»« cuá»‘i lÃªn Ä‘á»ƒ khÃ´ng lá»—i index
+            # Xóa từ cuối lên để không lỗi index
             for row in sorted(selected_rows, reverse=True):
                 if row < len(self.accounts):
                     del self.accounts[row]
             
             self.update_table()
             self.save_data()
-            self.log(f"ÄÃ£ xÃ³a {len(selected_rows)} tÃ i khoáº£n")
+            self.log(f"Đã xóa {len(selected_rows)} tài khoản")
 
     # ============================================================
     # CHECK ACCOUNTS
     # ============================================================
     def check_all_accounts(self):
         if not self.accounts:
-            QMessageBox.warning(self, "Cáº£nh bÃ¡o", "KhÃ´ng cÃ³ tÃ i khoáº£n nÃ o!")
+            QMessageBox.warning(self, "Cảnh báo", "Không có tài khoản nào!")
             return
         
         self.progress_bar.setVisible(True)
         self.progress_bar.setMaximum(len(self.accounts))
         self.progress_bar.setValue(0)
         
-        # Chuáº©n bá»‹ danh sÃ¡ch
+        # Chuẩn bị danh sách
         accounts_to_check = [(acc['email'], acc['password']) for acc in self.accounts]
         
-        # Táº¡o worker
+        # Tạo worker
         self.worker = BatchCheckWorker(accounts_to_check)
         self.worker.result_ready.connect(self.on_check_result)
         self.worker.progress.connect(self.on_check_progress)
         self.worker.finished_checking.connect(self.on_check_finished)
         self.worker.start()
         
-        self.log(f"Báº¯t Ä‘áº§u kiá»ƒm tra {len(accounts_to_check)} tÃ i khoáº£n...")
+        self.log(f"Bắt đầu kiểm tra {len(accounts_to_check)} tài khoản...")
 
     def check_first_account(self):
         if not self.accounts:
-            QMessageBox.warning(self, "Cáº£nh bÃ¡o", "KhÃ´ng cÃ³ tÃ i khoáº£n nÃ o!")
+            QMessageBox.warning(self, "Cảnh báo", "Không có tài khoản nào!")
             return
         
         acc = self.accounts[0]
@@ -1204,10 +1204,10 @@ class AccountManager(QMainWindow):
         self.worker.progress.connect(self.progress_bar.setValue)
         self.worker.start()
         
-        self.log(f"Äang kiá»ƒm tra: {acc['email']}")
+        self.log(f"Đang kiểm tra: {acc['email']}")
 
     def on_single_result(self, index, email, success, message):
-        self.accounts[index]['status'] = "Hoáº¡t Ä‘á»™ng" if success else "KhÃ´ng hoáº¡t Ä‘á»™ng"
+        self.accounts[index]['status'] = "Hoạt động" if success else "Không hoạt động"
         self.accounts[index]['last_check'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.update_table()
         self.save_data()
@@ -1235,10 +1235,10 @@ class AccountManager(QMainWindow):
                 self.execute_change_name(row, account, {"first_name": new_name})
 
     def on_check_result(self, email, success, message):
-        # TÃ¬m account theo email
+        # Tìm account theo email
         for acc in self.accounts:
             if acc['email'] == email:
-                acc['status'] = "Hoáº¡t Ä‘á»™ng" if success else "KhÃ´ng hoáº¡t Ä‘á»™ng"
+                acc['status'] = "Hoạt động" if success else "Không hoạt động"
                 acc['last_check'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 break
         
@@ -1247,13 +1247,13 @@ class AccountManager(QMainWindow):
 
     def on_check_progress(self, current, total):
         self.progress_bar.setValue(current)
-        self.status_bar.showMessage(f"Äang kiá»ƒm tra: {current}/{total}")
+        self.status_bar.showMessage(f"Đang kiểm tra: {current}/{total}")
 
     def on_check_finished(self):
         self.progress_bar.setVisible(False)
-        self.status_bar.showMessage("HoÃ n táº¥t kiá»ƒm tra")
+        self.status_bar.showMessage("Hoàn tất kiểm tra")
         self.save_data()
-        self.log("HoÃ n táº¥t kiá»ƒm tra táº¥t cáº£ tÃ i khoáº£n")
+        self.log("Hoàn tất kiểm tra tất cả tài khoản")
 
     # ============================================================
     # UI UPDATES
@@ -1306,11 +1306,11 @@ class AccountManager(QMainWindow):
             
             # Filter by status
             show = True
-            if filter_text == "Hoáº¡t Ä‘á»™ng" and status != "Hoáº¡t Ä‘á»™ng":
+            if filter_text == "Hoạt động" and status != "Hoạt động":
                 show = False
-            elif filter_text == "KhÃ´ng hoáº¡t Ä‘á»™ng" and status != "KhÃ´ng hoáº¡t Ä‘á»™ng":
+            elif filter_text == "Không hoạt động" and status != "Không hoạt động":
                 show = False
-            elif filter_text == "ChÆ°a kiá»ƒm tra" and status != "ChÆ°a kiá»ƒm tra":
+            elif filter_text == "Chưa kiểm tra" and status != "Chưa kiểm tra":
                 show = False
             
             # Filter by search
@@ -1321,7 +1321,7 @@ class AccountManager(QMainWindow):
 
     def export_accounts(self):
         file_path, _ = QFileDialog.getSaveFileName(
-            self, "Export danh sÃ¡ch", "accounts_export.txt", "Text Files (*.txt)"
+            self, "Export danh sách", "accounts_export.txt", "Text Files (*.txt)"
         )
         
         if not file_path:
@@ -1332,11 +1332,11 @@ class AccountManager(QMainWindow):
                 for acc in self.accounts:
                     f.write(f"{acc['email']}|{acc['password']}\n")
             
-            self.log(f"ÄÃ£ export {len(self.accounts)} tÃ i khoáº£n")
-            QMessageBox.information(self, "HoÃ n táº¥t", f"ÄÃ£ export Ä‘áº¿n:\n{file_path}")
+            self.log(f"Đã export {len(self.accounts)} tài khoản")
+            QMessageBox.information(self, "Hoàn tất", f"Đã export đến:\n{file_path}")
             
         except Exception as e:
-            QMessageBox.critical(self, "Lá»—i", f"KhÃ´ng thá»ƒ export: {e}")
+            QMessageBox.critical(self, "Lỗi", f"Không thể export: {e}")
 
     def log(self, message):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -1346,26 +1346,26 @@ class AccountManager(QMainWindow):
     # CONTEXT MENU
     # ============================================================
     def show_context_menu(self, position):
-        """Hiá»ƒn thá»‹ context menu khi chuá»™t pháº£i vÃ o báº£ng"""
+        """Hiển thị context menu khi chuột phải vào bảng"""
         menu = QMenu(self)
         
-        # Láº¥y dÃ²ng Ä‘Æ°á»£c chá»n
+        # Lấy dòng được chọn
         row = self.table.rowAt(position.y())
         if row < 0 or row >= len(self.accounts):
             return
         
-        # CÃ¡c hÃ nh Ä‘á»™ng
-        change_name_action = QAction(load_svg_icon(AppIcons.EDIT), " Äá»•i tÃªn", self)
+        # Các hành động
+        change_name_action = QAction(load_svg_icon(AppIcons.EDIT), " Đổi tên", self)
         change_name_action.triggered.connect(lambda: self.change_account_name(row))
         menu.addAction(change_name_action)
 
-        details_action = QAction("Xem thÃ´ng tin tÃ i khoáº£n", self)
+        details_action = QAction("Xem thông tin tài khoản", self)
         details_action.triggered.connect(lambda: self.show_account_details(row))
         menu.addAction(details_action)
         
         menu.addSeparator()
         
-        check_action = QAction(load_svg_icon(AppIcons.CHECK), " Kiá»ƒm tra tÃ i khoáº£n", self)
+        check_action = QAction(load_svg_icon(AppIcons.CHECK), " Kiểm tra tài khoản", self)
         check_action.triggered.connect(lambda: self.check_single_account(row))
         menu.addAction(check_action)
         
@@ -1375,28 +1375,28 @@ class AccountManager(QMainWindow):
         
         menu.addSeparator()
         
-        delete_action = QAction(load_svg_icon(AppIcons.TRASH), " XÃ³a tÃ i khoáº£n", self)
+        delete_action = QAction(load_svg_icon(AppIcons.TRASH), " Xóa tài khoản", self)
         delete_action.triggered.connect(lambda: self.delete_single_account(row))
         menu.addAction(delete_action)
         
         menu.exec(self.table.viewport().mapToGlobal(position))
 
     def copy_email(self, row):
-        """Copy email vÃ o clipboard"""
+        """Copy email vào clipboard"""
         if row < len(self.accounts):
             email = self.accounts[row]['email']
             QApplication.clipboard().setText(email)
-            self.log(f"ÄÃ£ copy email: {email}")
+            self.log(f"Đã copy email: {email}")
 
     def delete_single_account(self, row):
-        """XÃ³a má»™t tÃ i khoáº£n"""
+        """Xóa một tài khoản"""
         if row >= len(self.accounts):
             return
         
         email = self.accounts[row]['email']
         reply = QMessageBox.question(
-            self, "XÃ¡c nháº­n",
-            f"Báº¡n cÃ³ cháº¯c muá»‘n xÃ³a tÃ i khoáº£n {email}?",
+            self, "Xác nhận",
+            f"Bạn có chắc muốn xóa tài khoản {email}?",
             QMessageBox.Yes | QMessageBox.No
         )
         
@@ -1404,37 +1404,37 @@ class AccountManager(QMainWindow):
             del self.accounts[row]
             self.update_table()
             self.save_data()
-            self.log(f"ÄÃ£ xÃ³a: {email}")
+            self.log(f"Đã xóa: {email}")
 
     # ============================================================
     # CHANGE NAME
     # ============================================================
     def change_account_name(self, row):
-        """Má»Ÿ dialog Ä‘á»•i tÃªn cho tÃ i khoáº£n"""
+        """Mở dialog đổi tên cho tài khoản"""
         if row >= len(self.accounts):
             return
         
         acc = self.accounts[row]
         
-        # Láº¥y thÃ´ng tin tÃªn hiá»‡n táº¡i (cáº§n Ä‘Äƒng nháº­p Ä‘á»ƒ láº¥y)
-        # Hiá»‡n táº¡i dÃ¹ng giÃ¡ trá»‹ máº·c Ä‘á»‹nh
+        # Lấy thông tin tên hiện tại (cần đăng nhập để lấy)
+        # Hiện tại dùng giá trị mặc định
         dialog = ChangeNameDialog(self, current_first_name=acc.get("first_name_kanji", ""))
         
         if dialog.exec() == QDialog.Accepted:
             name_data = dialog.get_data()
             
-            # Kiá»ƒm tra Ã­t nháº¥t 1 trÆ°á»ng cÃ³ giÃ¡ trá»‹
+            # Kiểm tra ít nhất 1 trường có giá trị
             if not any(name_data.values()):
-                QMessageBox.warning(self, "Cáº£nh bÃ¡o", "Vui lÃ²ng nháº­p Ã­t nháº¥t 1 trÆ°á»ng!")
+                QMessageBox.warning(self, "Cảnh báo", "Vui lòng nhập ít nhất 1 trường!")
                 return
             
-            # XÃ¡c nháº­n
+            # Xác nhận
             reply = QMessageBox.question(
-                self, "XÃ¡c nháº­n Ä‘á»•i tÃªn",
-                f"Báº¡n cÃ³ cháº¯c muá»‘n Ä‘á»•i tÃªn tÃ i khoáº£n {acc['email']}?\n\n"
-                f"Há» má»›i: {name_data.get('last_name', '(giá»¯ nguyÃªn)')}\n"
-                f"TÃªn má»›i: {name_data.get('first_name', '(giá»¯ nguyÃªn)')}\n"
-                f"Nickname: {name_data.get('nickname', '(giá»¯ nguyÃªn)')}",
+                self, "Xác nhận đổi tên",
+                f"Bạn có chắc muốn đổi tên tài khoản {acc['email']}?\n\n"
+                f"Họ mới: {name_data.get('last_name', '(giữ nguyên)')}\n"
+                f"Tên mới: {name_data.get('first_name', '(giữ nguyên)')}\n"
+                f"Nickname: {name_data.get('nickname', '(giữ nguyên)')}",
                 QMessageBox.Yes | QMessageBox.No
             )
             
@@ -1442,7 +1442,7 @@ class AccountManager(QMainWindow):
                 self.execute_change_name(row, acc, name_data)
 
     def execute_change_name(self, row, acc, name_data):
-        """Thá»±c hiá»‡n Ä‘á»•i tÃªn"""
+        """Thực hiện đổi tên"""
         self.progress_bar.setVisible(True)
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
@@ -1453,7 +1453,7 @@ class AccountManager(QMainWindow):
         self.worker.progress.connect(self.progress_bar.setValue)
         self.worker.start()
         
-        self.log(f"Äang Ä‘á»•i tÃªn: {acc['email']}")
+        self.log(f"Đang đổi tên: {acc['email']}")
 
     def on_change_name_result(self, row, email, success, message):
         if success and email in self.pending_name_changes and row < len(self.accounts):
@@ -1461,18 +1461,18 @@ class AccountManager(QMainWindow):
             self.save_data()
         elif not success:
             self.pending_name_changes.pop(email, None)
-        """Xá»­ lÃ½ káº¿t quáº£ Ä‘á»•i tÃªn"""
+        """Xử lý kết quả đổi tên"""
         self.progress_bar.setVisible(False)
         
         if success:
-            self.log(f"âœ“ {email}: {message}")
-            QMessageBox.information(self, "ThÃ nh cÃ´ng", f"Äá»•i tÃªn thÃ nh cÃ´ng!\n{email}")
+            self.log(f"✓ {email}: {message}")
+            QMessageBox.information(self, "Thành công", f"Đổi tên thành công!\n{email}")
         else:
-            self.log(f"âœ— {email}: {message}")
-            QMessageBox.warning(self, "Tháº¥t báº¡i", f"Äá»•i tÃªn tháº¥t báº¡i!\n{message}")
+            self.log(f"✗ {email}: {message}")
+            QMessageBox.warning(self, "Thất bại", f"Đổi tên thất bại!\n{message}")
 
     def closeEvent(self, event):
-        # Dá»«ng táº¥t cáº£ workers
+        # Dừng tất cả workers
         for worker in self.workers:
             worker.stop()
         
@@ -1493,4 +1493,3 @@ if __name__ == "__main__":
     window.show()
     
     sys.exit(app.exec())
-
