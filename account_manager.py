@@ -551,39 +551,35 @@ class AddAccountDialog(QDialog):
 # DIALOG ĐỔI TÊN - Chỉ đổi Tên (Kanji)
 # ============================================================
 class ChangeNameDialog(QDialog):
-    def __init__(self, parent=None, current_first_name=""):
+    def __init__(self, parent=None, current_last_name="", current_first_name=""):
         super().__init__(parent)
-        self.setWindowTitle("Đổi Tên (Kanji)")
-        self.setMinimumWidth(400)
+        self.setWindowTitle("Edit Kanji name")
+        self.setMinimumWidth(420)
+        self.current_last_name = current_last_name
         self.current_first_name = current_first_name
         self.setup_ui()
 
     def setup_ui(self):
         layout = QFormLayout(self)
         layout.setVerticalSpacing(12)
-        
-        # Thông tin hiện tại
-        info_label = QLabel(f"Tên hiện tại (Kanji): {self.current_first_name}")
-        info_label.setStyleSheet("color: #666; font-size: 11px; padding: 10px; background-color: #f8f9fa; border-radius: 4px;")
+        info_label = QLabel("Only the two ?????? fields (? and ?) will change. Kana and all other profile fields stay the same.")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #555; padding: 8px; background-color: #f8f9fa; border-radius: 4px;")
         layout.addRow(info_label)
-        
-        layout.addRow("", QLabel(""))  # Spacer
-        
-        # Chỉ cho phép đổi Tên (Kanji)
+        self.last_name_input = QLineEdit(self.current_last_name)
+        self.last_name_input.setPlaceholderText("New family name (?)")
+        layout.addRow("Family name (Kanji / ?):", self.last_name_input)
         self.first_name_input = QLineEdit(self.current_first_name)
-        self.first_name_input.setPlaceholderText("Tên mới (Kanji)")
-        layout.addRow("Tên mới (Kanji) *:", self.first_name_input)
-        
-        # Nút
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
-        )
+        self.first_name_input.setPlaceholderText("New given name (?)")
+        layout.addRow("Given name (Kanji / ?):", self.first_name_input)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
 
     def get_data(self):
         return {
+            "last_name": self.last_name_input.text().strip(),
             "first_name": self.first_name_input.text().strip(),
         }
 
@@ -613,7 +609,7 @@ class ChangeNameWorker(QThread):
             result = change_name(
                 email=self.email,
                 password=self.password,
-                new_last_name="",  # Không đổi họ
+                new_last_name=self.name_data.get("last_name", ""),  # Preserve when blank
                 new_first_name=self.name_data.get("first_name", ""),
                 new_last_kana="",  # Không đổi họ kana
                 new_first_kana="",  # Không đổi tên kana
@@ -634,7 +630,7 @@ class ChangeNameWorker(QThread):
 # MAIN WINDOW
 # ============================================================
 class AccountDetailsDialog(QDialog):
-    """Display saved profile data; only the Kanji given name is editable."""
+    """Display saved profile data; only the two Kanji name fields are editable."""
     FIELDS = [
         ("email", "Email"), ("password", "Password"),
         ("last_name_kanji", "Họ (Kanji)"), ("first_name_kanji", "Tên (Kanji)"),
@@ -657,7 +653,7 @@ class AccountDetailsDialog(QDialog):
         for key, label in self.FIELDS:
             value = account.get(key)
             field = QLineEdit("" if value is None else str(value))
-            field.setReadOnly(key != "first_name_kanji")
+            field.setReadOnly(key not in ("last_name_kanji", "first_name_kanji"))
             if key == "password":
                 field.setEchoMode(QLineEdit.EchoMode.Password)
             if key == "first_name_kanji":
@@ -669,8 +665,11 @@ class AccountDetailsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
 
-    def updated_first_name(self):
-        return self.inputs["first_name_kanji"].text().strip()
+    def updated_name(self):
+        return {
+            "last_name": self.inputs["last_name_kanji"].text().strip(),
+            "first_name": self.inputs["first_name_kanji"].text().strip(),
+        }
 
 
 class AccountManager(QMainWindow):
@@ -1313,9 +1312,13 @@ class AccountManager(QMainWindow):
         account = self.accounts[row]
         dialog = AccountDetailsDialog(account, self)
         if dialog.exec() == QDialog.Accepted:
-            new_name = dialog.updated_first_name()
-            if new_name != account.get("first_name_kanji", ""):
-                self.execute_change_name(row, account, {"first_name": new_name})
+            new_name = dialog.updated_name()
+            changed_name = {
+                key: value for key, value in new_name.items()
+                if value != account.get("last_name_kanji" if key == "last_name" else "first_name_kanji", "")
+            }
+            if changed_name:
+                self.execute_change_name(row, account, changed_name)
 
     def on_check_result(self, email, success, message):
         # Tìm account theo email
@@ -1501,7 +1504,10 @@ class AccountManager(QMainWindow):
         
         # Lấy thông tin tên hiện tại (cần đăng nhập để lấy)
         # Hiện tại dùng giá trị mặc định
-        dialog = ChangeNameDialog(self, current_first_name=acc.get("first_name_kanji", ""))
+        dialog = ChangeNameDialog(
+            self, current_last_name=acc.get("last_name_kanji", ""),
+            current_first_name=acc.get("first_name_kanji", "")
+        )
         
         if dialog.exec() == QDialog.Accepted:
             name_data = dialog.get_data()
@@ -1530,7 +1536,7 @@ class AccountManager(QMainWindow):
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
         
-        self.pending_name_changes[acc['email']] = name_data.get("first_name", "")
+        self.pending_name_changes[acc['email']] = dict(name_data)
         self.worker = ChangeNameWorker(acc['email'], acc['password'], name_data)
         self.worker.result_ready.connect(lambda email, success, msg: self.on_change_name_result(row, email, success, msg))
         self.worker.progress.connect(self.progress_bar.setValue)
@@ -1540,7 +1546,11 @@ class AccountManager(QMainWindow):
 
     def on_change_name_result(self, row, email, success, message):
         if success and email in self.pending_name_changes and row < len(self.accounts):
-            self.accounts[row]["first_name_kanji"] = self.pending_name_changes.pop(email)
+            changed = self.pending_name_changes.pop(email)
+            if changed.get("last_name"):
+                self.accounts[row]["last_name_kanji"] = changed["last_name"]
+            if changed.get("first_name"):
+                self.accounts[row]["first_name_kanji"] = changed["first_name"]
             self.save_data()
         elif not success:
             self.pending_name_changes.pop(email, None)
