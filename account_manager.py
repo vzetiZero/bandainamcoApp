@@ -846,6 +846,8 @@ class AccountManager(QMainWindow):
         self.tab_widget.addTab(self.list_tab, load_svg_icon(AppIcons.FOLDER_OPEN, 16), "Danh sách tài khoản")
         self.campaigns = []
         self.campaign_states = {}   # row -> trạng thái, để cảnh báo mở đăng ký đúng 1 lần
+        self.campaign_signups = {}  # "tên|link" -> [{email, at}] (ghi nhận thủ công)
+        self.signup_account_emails = ()  # chữ ký danh sách tài khoản, để chỉ dựng combo khi đổi
         self.campaign_tab = self.create_campaign_tab()
         self.tab_widget.addTab(self.campaign_tab, load_svg_icon(AppIcons.CHECK, 16), "Chi\u1ebfn d\u1ecbch")
 
@@ -906,9 +908,11 @@ class AccountManager(QMainWindow):
         actions.addWidget(self.campaign_summary_label)
         layout.addLayout(actions)
 
-        self.campaign_table = QTableWidget(0, 7)
+        self.campaign_table = QTableWidget(0, 8)
         self.campaign_table.setHorizontalHeaderLabels(
-            ["Tên", "Link", "Mở đăng ký", "Đóng đăng ký", "Trạng thái", "Còn lại", "Ghi chú"])
+            ["Tên", "Link", "Mở đăng ký", "Đóng đăng ký", "Trạng thái", "Còn lại",
+             "Đã đăng ký", "Ghi chú"])
+        self.campaign_table.itemSelectionChanged.connect(self.update_signup_panel)
         self.campaign_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.campaign_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.campaign_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -916,9 +920,56 @@ class AccountManager(QMainWindow):
         for col, mode in enumerate((QHeaderView.ResizeMode.ResizeToContents, QHeaderView.ResizeMode.Stretch,
                                     QHeaderView.ResizeMode.ResizeToContents, QHeaderView.ResizeMode.ResizeToContents,
                                     QHeaderView.ResizeMode.ResizeToContents, QHeaderView.ResizeMode.ResizeToContents,
-                                    QHeaderView.ResizeMode.Stretch)):
+                                    QHeaderView.ResizeMode.ResizeToContents, QHeaderView.ResizeMode.Stretch)):
             self.campaign_table.horizontalHeader().setSectionResizeMode(col, mode)
         layout.addWidget(self.campaign_table, 1)
+
+        # Đăng ký thủ công: mở link + chép thông tin tài khoản, người dùng tự bấm submit
+        signup_group = QGroupBox("Đăng ký thủ công theo chiến dịch")
+        signup_layout = QVBoxLayout(signup_group)
+        hint = QLabel(
+            "Chọn một dòng chiến dịch và một tài khoản, bấm Mở trang chiến dịch để ra trình duyệt. "
+            "App chỉ chép sẵn thông tin vào clipboard — bạn tự dán và tự bấm submit. "
+            "Xong thì bấm Ghi nhận để lưu tài khoản đã đăng ký cho chiến dịch này."
+        )
+        hint.setWordWrap(True)
+        signup_layout.addWidget(hint)
+
+        signup_row = QHBoxLayout()
+        signup_row.addWidget(QLabel("Chiến dịch:"))
+        self.signup_campaign_label = QLabel("(chọn dòng trong bảng)")
+        signup_row.addWidget(self.signup_campaign_label, 2)
+        signup_row.addWidget(QLabel("Tài khoản:"))
+        self.signup_account_combo = QComboBox()
+        self.signup_account_combo.setMinimumWidth(240)
+        self.signup_account_combo.setToolTip("Tài khoản sẽ mở trang chiến dịch và chép vào clipboard")
+        signup_row.addWidget(self.signup_account_combo, 2)
+        self.signup_copy_password = QCheckBox("Chép cả mật khẩu")
+        self.signup_copy_password.setToolTip(
+            "Tắt (mặc định) chỉ chép email. Bật để chép cả email và mật khẩu, dán bằng Ctrl+V.")
+        signup_row.addWidget(self.signup_copy_password)
+        signup_layout.addLayout(signup_row)
+
+        signup_actions = QHBoxLayout()
+        for label, handler, tip in (
+            ("Mở trang chiến dịch", self.open_campaign_with_account,
+             "Mở link chiến dịch trong trình duyệt và chép email (tùy chọn mật khẩu) vào clipboard"),
+            ("Ghi nhận đã đăng ký", self.mark_account_registered,
+             "Lưu tài khoản đang chọn vào danh sách đã đăng ký của chiến dịch này"),
+            ("Xoá ghi nhận", self.unmark_account_registered,
+             "Bỏ tài khoản đang chọn khỏi danh sách đã đăng ký của chiến dịch này"),
+            ("Xem danh sách đã đăng ký", self.show_campaign_signups,
+             "Xem các tài khoản đã đăng ký cho chiến dịch đang chọn"),
+        ):
+            button = QPushButton(label)
+            button.setToolTip(tip)
+            button.clicked.connect(handler)
+            signup_actions.addWidget(button)
+        signup_actions.addStretch(1)
+        self.signup_summary_label = QLabel("")
+        signup_actions.addWidget(self.signup_summary_label)
+        signup_layout.addLayout(signup_actions)
+        layout.addWidget(signup_group)
 
         # Làm mới trạng thái định kỳ để không phải bấm tay khi tới giờ mở/đóng
         self.campaign_timer = QTimer(self)
@@ -1163,6 +1214,7 @@ class AccountManager(QMainWindow):
                 campaign.get("closes_at", ""),
                 status,
                 remaining,
+                self.signup_count_text(campaign),
                 campaign.get("notes", ""),
             ]
             for col, value in enumerate(values):
@@ -1170,8 +1222,10 @@ class AccountManager(QMainWindow):
                 if col == 4:
                     item.setForeground(QColor(CAMPAIGN_STATUS_COLORS.get(status, "#8a94a6")))
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                elif col == 5:
+                elif col in (5, 6):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if col == 6 and value:
+                    item.setForeground(QColor("#2864c5"))
                 self.campaign_table.setItem(row, col, item)
         self.campaign_states = states
         self.update_campaign_summary(previous_states)
@@ -1259,7 +1313,19 @@ class AccountManager(QMainWindow):
     def save_campaigns(self):
         self.ui_settings.setValue("campaigns", json.dumps(self.campaigns, ensure_ascii=False))
         self.ui_settings.sync()
+        self.prune_orphan_signups()
         self.refresh_campaign_table()
+
+    def prune_orphan_signups(self):
+        """Xoá ghi nhận của chiến dịch đã bị xoá, để dữ liệu không phình vô hạn."""
+        live_keys = {self.campaign_key(campaign) for campaign in self.campaigns}
+        stale = [key for key in self.campaign_signups if key not in live_keys]
+        for key in stale:
+            del self.campaign_signups[key]
+        if stale:
+            self.ui_settings.setValue(
+                "campaign_signups", json.dumps(self.campaign_signups, ensure_ascii=False))
+            self.ui_settings.sync()
 
     def add_campaign(self):
         dialog = CampaignDialog(parent=self)
@@ -1303,6 +1369,173 @@ class AccountManager(QMainWindow):
             del self.campaigns[row]
             self.save_campaigns()
 
+
+    # ============================================================
+    # ĐĂNG KÝ THỦ CÔNG THEO CHIẾN DỊCH
+    # ============================================================
+    @staticmethod
+    def campaign_key(campaign):
+        """Khoá ổn định của một chiến dịch, không đổi khi thứ tự dòng thay đổi."""
+        return "%s|%s" % (campaign.get("name", ""), campaign.get("url", ""))
+
+    def load_signups(self):
+        """Nạp danh sách tài khoản đã đăng ký từ QSettings."""
+        stored = self.ui_settings.value("campaign_signups", "{}")
+        try:
+            data = json.loads(stored) if isinstance(stored, str) else stored
+        except (TypeError, ValueError):
+            data = {}
+        self.campaign_signups = data if isinstance(data, dict) else {}
+
+    def save_signups(self):
+        self.ui_settings.setValue(
+            "campaign_signups", json.dumps(self.campaign_signups, ensure_ascii=False))
+        self.ui_settings.sync()
+        self.refresh_campaign_table()
+
+    def signups_for(self, campaign):
+        return list(self.campaign_signups.get(self.campaign_key(campaign), []))
+
+    def signup_count_text(self, campaign):
+        count = len(self.signups_for(campaign))
+        return "%d tài khoản" % count if count else "—"
+
+    def selected_account_email(self):
+        email = self.signup_account_combo.currentData()
+        return email or None
+
+    def selected_account_record(self):
+        """Trả (email, password) của tài khoản đang chọn trong combo."""
+        email = self.selected_account_email()
+        if not email:
+            return None, None
+        for account in self.accounts:
+            if account.get("email") == email:
+                return email, account.get("password", "")
+        return email, ""
+
+    def refresh_signup_accounts(self):
+        """Dựng lại combo tài khoản, chỉ khi danh sách tài khoản thực sự thay đổi."""
+        emails = tuple(account.get("email", "") for account in self.accounts)
+        if emails == self.signup_account_emails:
+            return
+        self.signup_account_emails = emails
+        current = self.signup_account_combo.currentData()
+        self.signup_account_combo.blockSignals(True)
+        self.signup_account_combo.clear()
+        for email in emails:
+            self.signup_account_combo.addItem(email, email)
+        if current:
+            index = self.signup_account_combo.findData(current)
+            if index >= 0:
+                self.signup_account_combo.setCurrentIndex(index)
+        self.signup_account_combo.blockSignals(False)
+        self.update_signup_panel()
+
+    def update_signup_panel(self, *args):
+        """Cập nhật nhãn chiến dịch và tổng kết số tài khoản đã đăng ký."""
+        row = self.campaign_table.currentRow()
+        if 0 <= row < len(self.campaigns):
+            campaign = self.campaigns[row]
+            status = self.campaign_states.get(row) or campaign_status(campaign)
+            self.signup_campaign_label.setText(
+                "%s (%s)" % (campaign.get("name") or "(chưa đặt tên)", status))
+            count = len(self.signups_for(campaign))
+            self.signup_summary_label.setText(
+                "Chiến dịch này: %d tài khoản đã đăng ký" % count)
+        else:
+            self.signup_campaign_label.setText("(chọn dòng trong bảng)")
+            self.signup_summary_label.setText("")
+
+    def open_campaign_with_account(self):
+        """
+        Mở trang chiến dịch kèm thông tin tài khoản trong clipboard.
+
+        Cố tình KHÔNG điền form và KHÔNG submit: đăng ký là thao tác thủ công của
+        người dùng trên trang 抽選, app chỉ chuẩn bị sẵn để giảm việc gõ.
+        """
+        row = self.selected_campaign_row()
+        if row is None:
+            return
+        email, password = self.selected_account_record()
+        if not email:
+            QMessageBox.information(self, "Đăng ký thủ công",
+                                    "Chưa có tài khoản nào trong danh sách. Hãy thêm tài khoản trước.")
+            return
+        campaign = self.campaigns[row]
+        # Mặc định chỉ chép email; bật checkbox mới chép kèm mật khẩu (dán bằng Ctrl+V vào 2 ô)
+        clipboard = "%s\n%s" % (email, password) if self.signup_copy_password.isChecked() else email
+        QApplication.clipboard().setText(clipboard)
+        webbrowser.open(campaign["url"])
+        detail = "email và mật khẩu" if self.signup_copy_password.isChecked() else "email"
+        message = "Đã mở %s và chép %s của %s vào clipboard. Dán bằng Ctrl+V rồi tự bấm submit." % (
+            campaign.get("name") or "trang chiến dịch", detail, email)
+        self.status_bar.showMessage(message, 10000)
+        self.log(message)
+
+    def mark_account_registered(self):
+        """Ghi nhận tài khoản đã đăng ký cho chiến dịch đang chọn."""
+        row = self.selected_campaign_row()
+        if row is None:
+            return
+        email = self.selected_account_email()
+        if not email:
+            QMessageBox.information(self, "Ghi nhận đăng ký",
+                                    "Chọn một tài khoản trong ô Tài khoản trước khi ghi nhận.")
+            return
+        campaign = self.campaigns[row]
+        key = self.campaign_key(campaign)
+        entries = self.campaign_signups.setdefault(key, [])
+        if any(entry.get("email") == email for entry in entries):
+            self.status_bar.showMessage("%s đã có trong danh sách của chiến dịch này" % email, 5000)
+            return
+        entries.append({"email": email, "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+        self.save_signups()
+        message = "Đã ghi nhận %s cho chiến dịch %s" % (
+            email, campaign.get("name") or "(chưa đặt tên)")
+        self.status_bar.showMessage(message, 6000)
+        self.log(message)
+        self.update_signup_panel()
+
+    def unmark_account_registered(self):
+        """Bỏ tài khoản khỏi danh sách đã đăng ký của chiến dịch đang chọn."""
+        row = self.selected_campaign_row()
+        if row is None:
+            return
+        email = self.selected_account_email()
+        if not email:
+            return
+        campaign = self.campaigns[row]
+        key = self.campaign_key(campaign)
+        entries = [entry for entry in self.campaign_signups.get(key, [])
+                   if entry.get("email") != email]
+        if len(entries) == len(self.campaign_signups.get(key, [])):
+            self.status_bar.showMessage("%s chưa được ghi nhận cho chiến dịch này" % email, 5000)
+            return
+        self.campaign_signups[key] = entries
+        self.save_signups()
+        message = "Đã bỏ ghi nhận %s khỏi chiến dịch %s" % (
+            email, campaign.get("name") or "(chưa đặt tên)")
+        self.status_bar.showMessage(message, 6000)
+        self.log(message)
+        self.update_signup_panel()
+
+    def show_campaign_signups(self):
+        """Liệt kê tài khoản đã đăng ký cho chiến dịch đang chọn."""
+        row = self.selected_campaign_row()
+        if row is None:
+            return
+        campaign = self.campaigns[row]
+        entries = self.signups_for(campaign)
+        name = campaign.get("name") or "(chưa đặt tên)"
+        if not entries:
+            QMessageBox.information(self, "Danh sách đã đăng ký",
+                                    "Chiến dịch %s chưa có tài khoản nào được ghi nhận." % name)
+            return
+        lines = ["Tài khoản đã đăng ký cho: %s" % name, ""]
+        for entry in sorted(entries, key=lambda item: item.get("at", "")):
+            lines.append("%s    (%s)" % (entry.get("email", ""), entry.get("at", "")))
+        QMessageBox.information(self, "Danh sách đã đăng ký", "\n".join(lines))
 
     def create_toolbar(self):
         self.toolbar = QToolBar()
@@ -1715,6 +1948,9 @@ class AccountManager(QMainWindow):
         except (TypeError, ValueError):
             self.campaigns = []
             self.refresh_campaign_table()
+        self.load_signups()
+        self.refresh_signup_accounts()
+        self.refresh_campaign_table()
         if os.path.exists(DATA_FILE):
             try:
                 with open(DATA_FILE, 'r', encoding='utf-8') as f:
@@ -2017,6 +2253,7 @@ class AccountManager(QMainWindow):
                         item.setForeground(QColor("#8a94a6"))
                 self.table.setItem(row, column, item)
         self.stats_label.setText(f"{len(self.accounts)} accounts")
+        self.refresh_signup_accounts()
     def apply_filter(self):
         filter_text = self.filter_combo.currentText()
         search_text = self.search_input.text().lower()

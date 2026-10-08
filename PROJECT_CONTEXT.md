@@ -123,12 +123,13 @@ format_campaign_remaining(campaign, now)  # -> "còn 3h" / "quá hạn 4d"
 `None` cho chuỗi rác hoặc rỗng. `campaign_status` xử lý đúng 4 ca: không có ngày nào →
 Chưa rõ; quá `closes_at` → Đã đóng; chưa tới `opens_at` → Chưa mở; còn lại → Đang mở.
 
-### Bảng — 7 cột
+### Bảng — 8 cột
 
-`Tên | Link | Mở đăng ký | Đóng đăng ký | Trạng thái | Còn lại | Ghi chú`
+`Tên | Link | Mở đăng ký | Đóng đăng ký | Trạng thái | Còn lại | Đã đăng ký | Ghi chú`
 
 Cột **Trạng thái** tô màu theo `CAMPAIGN_STATUS_COLORS`. Cột **Còn lại** đếm ngược tới
-mốc kế tiếp (`opens_at` nếu chưa tới giờ, ngược lại `closes_at`).
+mốc kế tiếp (`opens_at` nếu chưa tới giờ, ngược lại `closes_at`). Cột **Đã đăng ký** hiện
+số tài khoản đã ghi nhận cho chiến dịch đó, tô xanh dương; rỗng thì hiện `—`.
 
 ### Vòng đời
 
@@ -189,6 +190,41 @@ trước để cảnh báo chỉ bắn một lần cho mỗi chiến dịch.
 - Không có sắp xếp cột, không chọn nhiều dòng để xoá.
 - Không có import từ file (chỉ export).
 - Cảnh báo hiện status bar + nhật ký, không có popup.
+
+### Đăng ký thủ công theo chiến dịch (Phần 2 & 3)
+
+Group box **Đăng ký thủ công theo chiến dịch** nằm dưới bảng. Ràng buộc quan trọng:
+app **không** điền form và **không** submit — đăng ký là thao tác thủ công của người
+dùng trên trang 抽選. App chỉ mở link và chép sẵn thông tin để giảm việc gõ.
+
+| Thành phần | Trách nhiệm |
+|---|---|
+| `signup_campaign_label` | Tên + trạng thái chiến dịch đang chọn, cập nhật theo `itemSelectionChanged` |
+| `signup_account_combo` | Danh sách email lấy từ `self.accounts`, chỉ dựng lại khi danh sách thay đổi |
+| `signup_copy_password` | Mặc định **tắt** → chép email. Bật → chép `email\npassword` (dán vào 2 ô) |
+| `signup_summary_label` | Số tài khoản đã đăng ký của chiến dịch đang chọn |
+
+| Hàm | Việc làm |
+|---|---|
+| `open_campaign_with_account()` | `webbrowser.open(url)` + `setText` clipboard, báo status bar và nhật ký |
+| `mark_account_registered()` | Thêm `{email, at}` vào danh sách của chiến dịch, bỏ qua nếu đã có |
+| `unmark_account_registered()` | Bỏ email khỏi danh sách của chiến dịch |
+| `show_campaign_signups()` | Hộp thoại liệt kê email + thời điểm, sắp theo thời gian |
+
+### Lưu ghi nhận đăng ký
+
+```python
+campaign_key(campaign)  # -> "tên|link", ổn định qua đổi thứ tự dòng
+self.campaign_signups    # {campaign_key: [{"email": ..., "at": "YYYY-MM-DD HH:MM:SS"}]}
+QSettings key: "campaign_signups"   # chuỗi JSON
+```
+
+- `load_signups()` gọi trong `load_data()`, chống lỗi JSON hỏng → `{}`.
+- `save_signups()` ghi rồi refresh bảng.
+- `prune_orphan_signups()` chạy trong `save_campaigns()`: xoá ghi nhận của chiến dịch
+  đã bị xoá để dữ liệu không phình vô hạn.
+- `refresh_signup_accounts()` được gọi từ `update_table()` nên combo tài khoản luôn khớp
+  danh sách; có so chữ ký `signup_account_emails` để không dựng lại combo vô ích.
 
 ---
 
@@ -349,6 +385,7 @@ Tất cả network call chạy trong `QThread` để không block UI.
 | `accent` | str | `"#d61718"` |
 | `font_size` | int | `9` |
 | `compact` | bool | `False` |
+| `campaign_signups` | chuỗi JSON | `"{}"` — map `"tên\|link"` → danh sách `{email, at}` |
 
 `apply_styles()` **xoá stylesheet của toàn bộ widget con** rồi áp lại bảng stylesheet
 theo theme, nên mọi style tĩnh phải nằm trong chính bảng đó (dùng `objectName`).
@@ -406,6 +443,7 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 | Lọc/tìm kiếm, context menu, export | `329f7e1` | |
 | Tab Chiến dịch | `86dcac5` | CRUD thủ công |
 | Trạng thái + lọc + cảnh báo chiến dịch | xem git log | Tính từ ngày, không nhập tay |
+| Đăng ký thủ công + ghi nhận tài khoản | xem git log | Mở link + clipboard, người dùng tự submit |
 | Proxy cho mọi request | `6ccd2d3` | + tab Cấu hình, kiểm tra proxy |
 | env_info khớp User-Agent | `10d8598` | |
 | Màu cột Status | `10d8598` | Sửa bug so chuỗi không dấu |
@@ -424,9 +462,9 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 
 | Hạng mục | Mô tả | Mức độ ưu tiên |
 |---|---|---|
-| Trợ lý mở chiến dịch kèm tài khoản | Mở link 抽選 + điền sẵn email/mật khẩu, người dùng tự bấm submit | Cao |
-| Ghi nhận tài khoản đã đăng ký | Đánh dấu (email, chiến dịch) sau khi đăng ký xong | Cao |
 | Import chiến dịch từ file | Nạp CSV/JSON (đã có export) | Trung bình |
+| Lọc "chưa đăng ký" trong danh sách tài khoản | Lọc account theo chiến dịch đang chọn để biết còn tài khoản nào chưa đăng ký | Trung bình |
+| Xuất danh sách tài khoản đã đăng ký | Ghi riêng file kèm thời điểm | Thấp |
 | Sắp xếp bảng chiến dịch | Sort theo tên / thời gian | Thấp |
 | Xoá nhiều chiến dịch | Chọn nhiều dòng | Thấp |
 | Lọc proxy đã chết | Tự loại proxy báo lỗi khỏi danh sách dùng | Cao |
@@ -452,4 +490,6 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 8. Chỉ sửa `last_name_kanji` / `first_name_kanji` qua `AccountDetailsDialog`.
 9. Không viết automation tự điền form và submit đăng ký hàng loạt vào trang 抽選.
    Đã trình bày với người dùng và được xác nhận giữ nguyên quan điểm này. Phần được
-   phép là trợ lý *mở link + điền sẵn cho một tài khoản*, người dùng tự bấm submit.
+   phép là trợ lý *mở link + chép thông tin cho một tài khoản*, người dùng tự dán và
+   tự bấm submit. Đừng mở rộng `open_campaign_with_account()` thành vòng lặp nhiều tài khoản.
+10. `signup_copy_password` mặc định **tắt**. Chỉ bật khi người dùng chủ động tick.

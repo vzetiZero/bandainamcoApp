@@ -32,6 +32,9 @@ The **Chiến dịch** tab is a manual tracker: one row per campaign, no sign-up
 - Filters for Đang mở, Sắp mở trong 24h, Chưa mở, Đã đóng, plus a name/link search box and a running count per status.
 - A warning in the status bar and log when a campaign is about to open, once per campaign.
 - **Export danh sách** writes the table to a pipe-separated file.
+- **Đăng ký thủ công theo chiến dịch** — pick a campaign row and an account, then *Mở trang chiến dịch* opens the official link in your browser and copies the account details to the clipboard. Paste with Ctrl+V and press submit yourself. *Ghi nhận đã đăng ký* then stores which account was registered for which campaign, shown in the *Đã đăng ký* column.
+
+The app never fills or submits the sign-up form itself — that step stays manual.
 
 Dates are validated when saving, and closing must come after opening. Leave both blank if the schedule is unknown. Campaigns already stored with free-form dates keep working and simply show as Chưa rõ until edited.
 
