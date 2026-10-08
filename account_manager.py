@@ -16,9 +16,9 @@ from PySide6.QtWidgets import (
     QSplitter, QFrame, QComboBox, QCheckBox, QDialog,
     QDialogButtonBox, QFormLayout, QTabWidget, QGroupBox,
     QScrollArea, QSizePolicy, QSpacerItem, QAbstractItemView,
-    QTableWidgetItem, QHeaderView, QMenu, QInputDialog, QDateEdit
+    QTableWidgetItem, QHeaderView, QMenu, QInputDialog
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QPoint, QSettings, QDate
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QPoint, QSettings
 from PySide6.QtGui import QAction, QIcon, QFont, QColor, QPalette, QLinearGradient, QBrush, QPainter, QPixmap
 
 from icon_helper import load_svg_icon, AppIcons
@@ -49,7 +49,7 @@ def fetch_edit_profile(session, headers):
         "NICKNAME": "nickname", "ZIP": "postal_code", "POSTAL_CODE": "postal_code",
         "PREF": "prefecture", "CITY": "city", "ADDRESS": "address_number",
         "BUILDING": "building", "TEL": "phone", "PHONE": "phone",
-        "BIRTHDAY": "dob", "DOB": "dob", "SEX": "gender", "GENDER": "gender",
+        "SEX": "gender", "GENDER": "gender",
     }
     profile = {}
     for match in re.finditer(r'<(?:input|textarea)\b([^>]*)>(?:([^<]*)</textarea>)?', response.text, re.I):
@@ -119,8 +119,7 @@ def parse_member_mypage_html(html):
     field_map = {
         "\u6c0f\u540d\uff08\u6f22\u5b57\uff09": ("last_name_kanji", "first_name_kanji"),
         "\u6c0f\u540d\uff08\u30ab\u30ca\uff09": ("last_name_kana", "first_name_kana"),
-        "\u30cb\u30c3\u30af\u30cd\u30fc\u30e0": "nickname",
-        "\u751f\u5e74\u6708\u65e5": "dob", "\u6027\u5225": "gender",
+        "\u30cb\u30c3\u30af\u30cd\u30fc\u30e0": "nickname", "\u6027\u5225": "gender",
         "\u30e1\u30fc\u30eb\u30a2\u30c9\u30ec\u30b9": "email",
         "\u30d0\u30f3\u30c0\u30a4\u30ca\u30e0\u30b3ID": "bandai_namco_id_status",
         "\u30dd\u30a4\u30f3\u30c8\u898f\u7d04": "points_terms_status",
@@ -215,8 +214,6 @@ def inspect_login_handoff(session, headers, redirect_url, language):
     result = {}
     details = data.get("data", {})
     gadata = details.get("gadata", {}) if isinstance(details, dict) else {}
-    if gadata.get("birthday"):
-        result["dob"] = gadata["birthday"]
     if gadata.get("gender") is not None:
         result["gender_code"] = str(gadata["gender"])
     next_url = details.get("btn", {}).get("btn-next", {}).get("url") if isinstance(details, dict) else None
@@ -446,10 +443,6 @@ class AddAccountDialog(QDialog):
         self.nickname_input.setPlaceholderText("Biệt danh")
         layout.addRow("Biệt danh:", self.nickname_input)
         
-        # Ngày sinh
-        self.dob_input = QLineEdit()
-        self.dob_input.setPlaceholderText("DD/MM/YYYY")
-        layout.addRow("Ngày sinh:", self.dob_input)
         
         # Giới tính
         self.gender_combo = QComboBox()
@@ -504,7 +497,6 @@ class AddAccountDialog(QDialog):
             "last_kana": self.last_kana_input.text().strip(),
             "first_kana": self.first_kana_input.text().strip(),
             "nickname": self.nickname_input.text().strip(),
-            "dob": self.dob_input.text().strip(),
             "gender": self.gender_combo.currentText(),
             "postal_code": self.postal_code_input.text().strip(),
             "prefecture": self.prefecture_input.text().strip(),
@@ -551,37 +543,6 @@ class ChangeNameDialog(QDialog):
         }
 
 
-class ChangeDateOfBirthDialog(QDialog):
-    def __init__(self, current_dob="", parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Sửa ngày sinh")
-        self.setMinimumWidth(360)
-        layout = QFormLayout(self)
-        info = QLabel("Chọn ngày sinh mới cho tài khoản. Ngày sinh hiện tại trên hồ sơ sẽ được thay đổi khi lưu.")
-        info.setWordWrap(True)
-        layout.addRow(info)
-
-        self.date_input = QDateEdit()
-        self.date_input.setCalendarPopup(True)
-        self.date_input.setDisplayFormat("dd/MM/yyyy")
-        self.date_input.setDateRange(QDate(1900, 1, 1), QDate.currentDate())
-        parsed_date = QDate()
-        for date_format in ("yyyy/MM/dd", "yyyy-MM-dd", "dd/MM/yyyy", "yyyy.MM.dd"):
-            parsed_date = QDate.fromString(str(current_dob), date_format)
-            if parsed_date.isValid():
-                break
-        self.date_input.setDate(parsed_date if parsed_date.isValid() else QDate(1990, 1, 1))
-        layout.addRow("Ngày sinh mới:", self.date_input)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addRow(buttons)
-
-    def get_date(self):
-        return self.date_input.date().toString("yyyy/MM/dd")
-
-
 # ============================================================
 # WORKER THREAD CHO ĐỔI TÊN
 # ============================================================
@@ -612,7 +573,6 @@ class ChangeNameWorker(QThread):
                 new_last_kana="",  # Không đổi họ kana
                 new_first_kana="",  # Không đổi tên kana
                 new_nickname="",
-                new_dob=self.name_data.get("dob", "")
             )
             
             self.progress.emit(100)
@@ -634,7 +594,7 @@ class AccountDetailsDialog(QDialog):
         ("email", "Email"), ("password", "Password"),
         ("last_name_kanji", "Họ (Kanji)"), ("first_name_kanji", "Tên (Kanji)"),
         ("last_name_kana", "Họ (Kana)"), ("first_name_kana", "Tên (Kana)"),
-        ("nickname", "Nickname"), ("dob", "Ngày sinh"), ("gender", "Giới tính"),
+        ("nickname", "Nickname"), ("gender", "Giới tính"),
         ("postal_code", "Mã bưu điện"), ("prefecture", "Tỉnh"), ("city", "Thành phố"),
         ("address_number", "Địa chỉ"), ("building", "Tòa nhà"), ("phone", "Điện thoại"),
         ("current_points", "Điểm hiện tại"), ("bandai_namco_id_status", "Bandai Namco ID"),
@@ -1439,7 +1399,7 @@ class AccountManager(QMainWindow):
             ("Status", "status"), ("Last check", "last_check"),
             ("Last name (Kanji)", "last_name_kanji"), ("First name (Kanji)", "first_name_kanji"),
             ("Last name (Kana)", "last_name_kana"), ("First name (Kana)", "first_name_kana"),
-            ("Nickname", "nickname"), ("Date of birth", "dob"), ("Gender", "gender"),
+            ("Nickname", "nickname"), ("Gender", "gender"),
             ("Postal code", "postal_code"), ("Prefecture", "prefecture"), ("City", "city"),
             ("Address", "address_number"), ("Building", "building"), ("Phone", "phone"),
             ("Points", "current_points"), ("Bandai Namco ID", "bandai_namco_id_status"),
@@ -1533,10 +1493,6 @@ class AccountManager(QMainWindow):
         change_name_action = QAction(load_svg_icon(AppIcons.EDIT), " Đổi tên", self)
         change_name_action.triggered.connect(lambda: self.change_account_name(row))
         menu.addAction(change_name_action)
-
-        birthday_action = QAction("Sửa ngày sinh", self)
-        birthday_action.triggered.connect(lambda: self.change_account_dob(row))
-        menu.addAction(birthday_action)
 
         details_action = QAction("Xem thông tin tài khoản", self)
         details_action.triggered.connect(lambda: self.show_account_details(row))
@@ -1637,24 +1593,6 @@ class AccountManager(QMainWindow):
         
         self.log(f'\u0110ang c\u1eadp nh\u1eadt h\u1ed3 s\u01a1: {acc["email"]}')
 
-    def change_account_dob(self, row):
-        if row < 0 or row >= len(self.accounts):
-            return
-        account = self.accounts[row]
-        dialog = ChangeDateOfBirthDialog(account.get("dob", ""), self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        new_dob = dialog.get_date()
-        reply = QMessageBox.question(
-            self,
-            "X\u00e1c nh\u1eadn \u0111\u1ed5i ng\u00e0y sinh",
-            f"\u0110\u1ed5i ng\u00e0y sinh c\u1ee7a {account['email']} th\u00e0nh {new_dob}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self.execute_change_name(row, account, {"dob": new_dob})
-
     def on_change_name_result(self, row, email, success, message):
         if success and email in self.pending_name_changes:
             changed = self.pending_name_changes.pop(email)
@@ -1664,8 +1602,6 @@ class AccountManager(QMainWindow):
                     account["last_name_kanji"] = changed["last_name"]
                 if changed.get("first_name"):
                     account["first_name_kanji"] = changed["first_name"]
-                if changed.get("dob"):
-                    account["dob"] = changed["dob"]
                 self.save_data()
                 self.update_table()
         elif not success:
