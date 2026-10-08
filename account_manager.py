@@ -8,6 +8,7 @@ from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime
+import webbrowser
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QTextEdit, QTableWidget,
@@ -631,6 +632,42 @@ class AccountDetailsDialog(QDialog):
         }
 
 
+class CampaignDialog(QDialog):
+    def __init__(self, campaign=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Chiến dịch")
+        self.setMinimumWidth(460)
+        campaign = campaign or {}
+        layout = QFormLayout(self)
+        self.name_input = QLineEdit(campaign.get("name", ""))
+        self.url_input = QLineEdit(campaign.get("url", ""))
+        self.open_input = QLineEdit(campaign.get("opens_at", ""))
+        self.close_input = QLineEdit(campaign.get("closes_at", ""))
+        self.notes_input = QTextEdit()
+        self.notes_input.setPlainText(campaign.get("notes", ""))
+        self.notes_input.setMaximumHeight(120)
+        self.open_input.setPlaceholderText("YYYY-MM-DD HH:MM")
+        self.close_input.setPlaceholderText("YYYY-MM-DD HH:MM")
+        layout.addRow("Tên chiến dịch:", self.name_input)
+        layout.addRow("Link chính thức:", self.url_input)
+        layout.addRow("Mở đăng ký:", self.open_input)
+        layout.addRow("Đóng đăng ký:", self.close_input)
+        layout.addRow("Ghi chú thể lệ:", self.notes_input)
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def get_campaign(self):
+        return {
+            "name": self.name_input.text().strip(),
+            "url": self.url_input.text().strip(),
+            "opens_at": self.open_input.text().strip(),
+            "closes_at": self.close_input.text().strip(),
+            "notes": self.notes_input.toPlainText().strip(),
+        }
+
+
 class AccountManager(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -695,10 +732,104 @@ class AccountManager(QMainWindow):
         log_panel.setMinimumWidth(180)
         list_layout.addWidget(log_panel, 1)
         self.tab_widget.addTab(self.list_tab, load_svg_icon(AppIcons.FOLDER_OPEN, 16), "Danh sách tài khoản")
+        self.campaigns = []
+        self.campaign_tab = self.create_campaign_tab()
+        self.tab_widget.addTab(self.campaign_tab, load_svg_icon(AppIcons.CHECK, 16), "Chi\u1ebfn d\u1ecbch")
+
         # Status Bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Sẵn sàng")
+
+    def create_campaign_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+        heading = QLabel("Qu\u1ea3n l\u00fd chi\u1ebfn d\u1ecbch")
+        heading.setStyleSheet("font-size: 14pt; font-weight: 700;")
+        layout.addWidget(heading)
+        explanation = QLabel("L\u01b0u link v\u00e0 th\u1eddi gian t\u1eebng\u00a0\u0111\u1ee3t. M\u1edf trang ch\u00ednh th\u1ee9c \u0111\u1ec3 t\u1ef1 xem th\u1ec3 l\u1ec7 v\u00e0 \u0111\u0103ng k\u00fd.")
+        explanation.setWordWrap(True)
+        layout.addWidget(explanation)
+
+        actions = QHBoxLayout()
+        for label, handler in (("Th\u00eam chi\u1ebfn d\u1ecbch", self.add_campaign), ("S\u1eeda", self.edit_campaign),
+                               ("M\u1edf trang ch\u00ednh th\u1ee9c", self.open_campaign), ("X\u00f3a", self.delete_campaign)):
+            button = QPushButton(label)
+            button.clicked.connect(handler)
+            actions.addWidget(button)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+
+        self.campaign_table = QTableWidget(0, 5)
+        self.campaign_table.setHorizontalHeaderLabels(["T\u00ean", "Link", "M\u1edf \u0111\u0103ng k\u00fd", "\u0110\u00f3ng \u0111\u0103ng k\u00fd", "Ghi ch\u00fa"])
+        self.campaign_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.campaign_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.campaign_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.campaign_table.setAlternatingRowColors(True)
+        for col, mode in enumerate((QHeaderView.ResizeMode.ResizeToContents, QHeaderView.ResizeMode.Stretch,
+                                    QHeaderView.ResizeMode.ResizeToContents, QHeaderView.ResizeMode.ResizeToContents,
+                                    QHeaderView.ResizeMode.Stretch)):
+            self.campaign_table.horizontalHeader().setSectionResizeMode(col, mode)
+        layout.addWidget(self.campaign_table, 1)
+        return tab
+
+    def refresh_campaign_table(self):
+        self.campaign_table.setRowCount(len(self.campaigns))
+        keys = ("name", "url", "opens_at", "closes_at", "notes")
+        for row, campaign in enumerate(self.campaigns):
+            for col, key in enumerate(keys):
+                self.campaign_table.setItem(row, col, QTableWidgetItem(campaign.get(key, "")))
+
+    def selected_campaign_row(self):
+        row = self.campaign_table.currentRow()
+        if row < 0 or row >= len(self.campaigns):
+            QMessageBox.information(self, "Chi\u1ebfn d\u1ecbch", "H\u00e3y ch\u1ecdn m\u1ed9t chi\u1ebfn d\u1ecbch tr\u01b0\u1edbc.")
+            return None
+        return row
+
+    def save_campaigns(self):
+        self.ui_settings.setValue("campaigns", json.dumps(self.campaigns, ensure_ascii=False))
+        self.ui_settings.sync()
+        self.refresh_campaign_table()
+
+    def add_campaign(self):
+        dialog = CampaignDialog(parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        campaign = dialog.get_campaign()
+        if not campaign["name"] or urlparse(campaign["url"]).scheme not in {"http", "https"}:
+            QMessageBox.warning(self, "Th\u00f4ng tin ch\u01b0a h\u1ee3p l\u1ec7", "Nh\u1eadp t\u00ean chi\u1ebfn d\u1ecbch v\u00e0 link http:// ho\u1eb7c https://.")
+            return
+        self.campaigns.append(campaign)
+        self.save_campaigns()
+
+    def edit_campaign(self):
+        row = self.selected_campaign_row()
+        if row is None:
+            return
+        dialog = CampaignDialog(self.campaigns[row], self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        campaign = dialog.get_campaign()
+        if not campaign["name"] or urlparse(campaign["url"]).scheme not in {"http", "https"}:
+            QMessageBox.warning(self, "Th\u00f4ng tin ch\u01b0a h\u1ee3p l\u1ec7", "Nh\u1eadp t\u00ean chi\u1ebfn d\u1ecbch v\u00e0 link http:// ho\u1eb7c https://.")
+            return
+        self.campaigns[row] = campaign
+        self.save_campaigns()
+
+    def open_campaign(self):
+        row = self.selected_campaign_row()
+        if row is not None:
+            webbrowser.open(self.campaigns[row]["url"])
+
+    def delete_campaign(self):
+        row = self.selected_campaign_row()
+        if row is None:
+            return
+        del self.campaigns[row]
+        self.save_campaigns()
 
     def create_toolbar(self):
         self.toolbar = QToolBar()
@@ -1126,6 +1257,15 @@ class AccountManager(QMainWindow):
     # DATA MANAGEMENT
     # ============================================================
     def load_data(self):
+        try:
+            stored_campaigns = self.ui_settings.value("campaigns", "[]")
+            self.campaigns = json.loads(stored_campaigns) if isinstance(stored_campaigns, str) else stored_campaigns
+            if not isinstance(self.campaigns, list):
+                self.campaigns = []
+            self.refresh_campaign_table()
+        except (TypeError, ValueError):
+            self.campaigns = []
+            self.refresh_campaign_table()
         if os.path.exists(DATA_FILE):
             try:
                 with open(DATA_FILE, 'r', encoding='utf-8') as f:
