@@ -1,0 +1,11 @@
+accounts_data.json
+namco_session.json
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+debug_*.py
+test_*.py
+recon_form.py
+fetch_*.py
