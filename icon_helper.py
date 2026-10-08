@@ -12,14 +12,14 @@ _ICON_CACHE = {}
 _ICONS_DIR = os.path.join(os.path.dirname(__file__), "icons")
 
 
-def load_svg_icon(name: str, size: int = 24, color: str = None) -> QIcon:
+def load_svg_icon(name: str, size: int = 24, color: str = "#087f75") -> QIcon:
     """
     Load an SVG icon from the icons directory.
     
     Args:
         name: Icon filename without .svg extension (e.g., "plus", "trash")
         size: Icon size in pixels (default 24)
-        color: Optional color override (CSS color string, e.g., "#d61718", "white")
+        color: Optional color override (CSS color string, e.g., "#087f75")
     
     Returns:
         QIcon object

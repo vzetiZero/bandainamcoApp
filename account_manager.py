@@ -16,10 +16,10 @@ from PySide6.QtWidgets import (
     QSplitter, QFrame, QComboBox, QCheckBox, QDialog,
     QDialogButtonBox, QFormLayout, QTabWidget, QGroupBox,
     QScrollArea, QSizePolicy, QSpacerItem, QAbstractItemView,
-    QTableWidgetItem, QHeaderView, QMenu, QInputDialog
+    QTableWidgetItem, QHeaderView, QMenu, QInputDialog, QDateEdit
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QPoint
-from PySide6.QtGui import QAction, QIcon, QFont, QColor, QPalette, QLinearGradient, QBrush, QPainter
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QPoint, QSettings, QDate
+from PySide6.QtGui import QAction, QIcon, QFont, QColor, QPalette, QLinearGradient, QBrush, QPainter, QPixmap
 
 from icon_helper import load_svg_icon, AppIcons
 
@@ -77,8 +77,7 @@ class MypageMemberInfoParser(HTMLParser):
         self.mode = None
 
     def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        if tag == "dl" and "block-mypage-member-info-item" in attrs.get("class", "").split():
+        if tag == "dl" and self.current is None:
             self.current = {"label": [], "value": [], "bare": []}
             self.mode = None
         elif self.current is not None and tag == "dt":
@@ -104,7 +103,7 @@ class MypageMemberInfoParser(HTMLParser):
         if tag in ("dt", "dd"):
             self.mode = None
         elif tag == "dl":
-            label = re.sub(r"\s+", "", "".join(self.current["label"]))
+            label = re.sub(r"[\s:：*]+", "", "".join(self.current["label"]))
             value = "".join(self.current["value"]).strip()
             if not value:
                 value = "".join(self.current["bare"]).strip()
@@ -178,7 +177,12 @@ def inspect_login_handoff(session, headers, redirect_url, language):
     code = query.get("code", [""])[0]
     if not code:
         return {}
-    params = {key: query.get(key, [""])[0] for key in ("client_id", "backto", "redirect_uri", "customize_id")}
+    params = {
+        "client_id": query.get("client_id", [""])[0] or CLIENT_ID,
+        "backto": query.get("backto", [""])[0],
+        "redirect_uri": query.get("redirect_uri", [""])[0] or REDIRECT_URI,
+        "customize_id": query.get("customize_id", [""])[0],
+    }
     params.update({"code": code, "language": language, "cookie": json.dumps(session.cookies.get_dict())})
     request_headers = dict(headers)
     request_headers["X-Requested-With"] = "XMLHttpRequest"
@@ -313,11 +317,19 @@ class LoginWorker(QThread):
                         session.cookies.set(cookie_data["name"], cookie_data["value"])
                 profile = {"email": self.email, "password": self.password}
                 handoff = inspect_login_handoff(session, headers, response_data.get("redirect", ""), language)
-                profile.update(handoff)
-                if "profile_fetch_status" not in profile:
-                    member_profile = fetch_member_profile(session, headers)
+                handoff_status = handoff.get("profile_fetch_status")
+                profile.update({key: value for key, value in handoff.items() if key != "profile_fetch_status"})
+
+                # A failed passkey handoff does not necessarily mean the Parks2
+                # profile page is unavailable, so always try the direct page fetch.
+                member_profile = fetch_member_profile(session, headers)
+                if member_profile:
                     profile.update(member_profile)
-                    profile["profile_fetch_status"] = "Profile loaded from Parks2" if member_profile else "Parks2 login complete; no profile fields were parsed"
+                    profile["profile_fetch_status"] = "Profile loaded from Parks2"
+                    if handoff_status:
+                        profile["parks2_handoff_status"] = handoff_status
+                else:
+                    profile["profile_fetch_status"] = handoff_status or "Parks2 login complete; no profile fields were parsed"
                 profile.setdefault("status", "Chua kiem tra")
                 profile.setdefault("last_check", None)
                 self.profile_ready.emit(self.email, profile)
@@ -343,6 +355,7 @@ class LoginWorker(QThread):
 class BatchCheckWorker(QThread):
     """Thread kiểm tra nhiều tài khoản cùng lúc"""
     result_ready = Signal(str, bool, str)  # email, success, message
+    profile_ready = Signal(str, dict)
     progress = Signal(int, int)  # current, total
     finished_checking = Signal()
 
@@ -353,72 +366,26 @@ class BatchCheckWorker(QThread):
 
     def run(self):
         total = len(self.accounts)
-        for i, (email, password) in enumerate(self.accounts):
+        for index, (email, password) in enumerate(self.accounts):
             if not self._is_running:
                 break
-            
-            self.progress.emit(i + 1, total)
-            
-            try:
-                session = requests.Session()
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "application/json, text/javascript, */*; q=0.01",
-                    "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-                    "Origin": "https://account.bandainamcoid.com",
-                    "Referer": LOGIN_URL,
-                }
-
-                login_params = {
-                    "client_id": CLIENT_ID,
-                    "redirect_uri": REDIRECT_URI,
-                }
-                session.get(LOGIN_URL, params=login_params, headers=headers, timeout=30)
-                language = session.cookies.get("language", "ja")
-
-                env_info = json.dumps({
-                    "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "lang": language,
-                    "plat": "Win32",
-                    "sw": 1920,
-                    "sh": 1080,
-                }, separators=(',', ':'))
-
-                login_data = {
-                    "client_id": CLIENT_ID,
-                    "redirect_uri": REDIRECT_URI,
-                    "backto": "",
-                    "customize_id": "",
-                    "login_id": email,
-                    "password": password,
-                    "env_info": env_info,
-                    "retention": 1,
-                    "language": language,
-                    "cookie": json.dumps({}),
-                    "prompt": "",
-                }
-
-                response = session.post(
-                    f"{API_URL}v3/login/idpw",
-                    data=login_data,
-                    headers=headers,
-                    timeout=30
-                )
-                
-                response_data = response.json()
-                
-                if response_data.get("result") == "OK":
-                    self.result_ready.emit(email, True, "✓ Hoạt động")
-                else:
-                    error_msg = response_data.get("msg", "Lỗi")
-                    self.result_ready.emit(email, False, f"✗ {error_msg}")
-                
-            except Exception as e:
-                self.result_ready.emit(email, False, f"✗ Lỗi: {str(e)}")
-            
-            # Delay nhỏ để tránh bị block
+            self.progress.emit(index + 1, total)
+            account_worker = LoginWorker(email, password)
+            profiles, results = [], []
+            account_worker.profile_ready.connect(
+                lambda account_email, profile: profiles.append((account_email, profile)),
+                Qt.ConnectionType.DirectConnection,
+            )
+            account_worker.result_ready.connect(
+                lambda account_email, success, message: results.append((account_email, success, message)),
+                Qt.ConnectionType.DirectConnection,
+            )
+            account_worker.run()
+            for account_email, profile in profiles:
+                self.profile_ready.emit(account_email, profile)
+            for account_email, success, message in results:
+                self.result_ready.emit(account_email, success, message)
             time.sleep(0.5)
-        
         self.finished_checking.emit()
 
     def stop(self):
@@ -584,6 +551,37 @@ class ChangeNameDialog(QDialog):
         }
 
 
+class ChangeDateOfBirthDialog(QDialog):
+    def __init__(self, current_dob="", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Sửa ngày sinh")
+        self.setMinimumWidth(360)
+        layout = QFormLayout(self)
+        info = QLabel("Chọn ngày sinh mới cho tài khoản. Ngày sinh hiện tại trên hồ sơ sẽ được thay đổi khi lưu.")
+        info.setWordWrap(True)
+        layout.addRow(info)
+
+        self.date_input = QDateEdit()
+        self.date_input.setCalendarPopup(True)
+        self.date_input.setDisplayFormat("dd/MM/yyyy")
+        self.date_input.setDateRange(QDate(1900, 1, 1), QDate.currentDate())
+        parsed_date = QDate()
+        for date_format in ("yyyy/MM/dd", "yyyy-MM-dd", "dd/MM/yyyy", "yyyy.MM.dd"):
+            parsed_date = QDate.fromString(str(current_dob), date_format)
+            if parsed_date.isValid():
+                break
+        self.date_input.setDate(parsed_date if parsed_date.isValid() else QDate(1990, 1, 1))
+        layout.addRow("Ngày sinh mới:", self.date_input)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def get_date(self):
+        return self.date_input.date().toString("yyyy/MM/dd")
+
+
 # ============================================================
 # WORKER THREAD CHO ĐỔI TÊN
 # ============================================================
@@ -613,7 +611,8 @@ class ChangeNameWorker(QThread):
                 new_first_name=self.name_data.get("first_name", ""),
                 new_last_kana="",  # Không đổi họ kana
                 new_first_kana="",  # Không đổi tên kana
-                new_nickname=""     # Không đổi nickname
+                new_nickname="",
+                new_dob=self.name_data.get("dob", "")
             )
             
             self.progress.emit(100)
@@ -676,12 +675,15 @@ class AccountManager(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("NAMCO Account Manager")
+        logo_path = os.path.join(os.path.dirname(__file__), "icons", "logo.png")
+        self.setWindowIcon(QIcon(logo_path))
         self.setMinimumSize(1400, 800)
         
         # Dữ liệu
         self.accounts = []  # List of dict with all account fields
         self.workers = []
         self.pending_name_changes = {}
+        self.ui_settings = QSettings("NAMCO", "AccountManager")
         
         self.setup_ui()
         self.load_data()
@@ -720,14 +722,17 @@ class AccountManager(QMainWindow):
         list_layout = QHBoxLayout(self.list_tab)
         list_layout.setContentsMargins(12, 12, 12, 12)
         list_layout.setSpacing(12)
-        list_layout.addWidget(self.create_right_panel(), 3)
+        list_layout.addWidget(self.create_right_panel(), 5)
         log_panel = QFrame()
         log_layout = QVBoxLayout(log_panel)
         log_layout.addWidget(QLabel("Nhật ký"))
         self.log_text.show()
-        self.log_text.setMinimumWidth(260)
+        self.log_text.setMinimumWidth(0)
+        self.log_text.setObjectName("activityLog")
+        self.log_text.setFont(QFont("Consolas", 8))
         self.log_text.setMaximumHeight(16777215)
         log_layout.addWidget(self.log_text)
+        log_panel.setMinimumWidth(180)
         list_layout.addWidget(log_panel, 1)
         self.tab_widget.addTab(self.list_tab, load_svg_icon(AppIcons.FOLDER_OPEN, 16), "Danh sách tài khoản")
         # Status Bar
@@ -742,32 +747,17 @@ class AccountManager(QMainWindow):
         self.toolbar.setStyleSheet("QToolBar { border: none; padding: 10px; }")
         
         # Title
-        title = QLabel("NAMCO Account Manager")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #d61718;")
+        title = QLabel()
+        logo = QPixmap(os.path.join(os.path.dirname(__file__), "icons", "logo.png"))
+        title.setPixmap(logo.scaled(190, 44, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        title.setToolTip("NAMCO Account Manager")
         self.toolbar.addWidget(title)
         
         self.toolbar.addSeparator()
         
-        # Add Account Button
-        add_btn = QPushButton(" Thêm tài khoản")
-        add_btn.setIcon(load_svg_icon(AppIcons.PLUS, 20, "white"))
-        add_btn.clicked.connect(self.add_account)
-        add_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #d61718;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #b51515; }
-        """)
-        self.toolbar.addWidget(add_btn)
-        
         # Import Button
         import_btn = QPushButton(" Import TXT")
-        import_btn.setIcon(load_svg_icon(AppIcons.FOLDER_OPEN, 20, "white"))
+        import_btn.setIcon(load_svg_icon(AppIcons.FOLDER_OPEN, 20, "#087f75"))
         import_btn.clicked.connect(self.import_from_txt)
         import_btn.setStyleSheet("""
             QPushButton {
@@ -782,8 +772,8 @@ class AccountManager(QMainWindow):
         self.toolbar.addWidget(import_btn)
         
         # Check All Button
-        check_btn = QPushButton(" Kiểm tra tất cả")
-        check_btn.setIcon(load_svg_icon(AppIcons.CHECK, 20, "white"))
+        check_btn = QPushButton(" Ki\u1ec3m tra t\u1ea5t c\u1ea3 t\u00e0i kho\u1ea3n")
+        check_btn.setIcon(load_svg_icon(AppIcons.CHECK, 20, "#087f75"))
         check_btn.clicked.connect(self.check_all_accounts)
         check_btn.setStyleSheet("""
             QPushButton {
@@ -799,7 +789,7 @@ class AccountManager(QMainWindow):
         
         # Delete Selected Button
         delete_btn = QPushButton(" Xóa đã chọn")
-        delete_btn.setIcon(load_svg_icon(AppIcons.TRASH, 20, "white"))
+        delete_btn.setIcon(load_svg_icon(AppIcons.TRASH, 20, "#087f75"))
         delete_btn.clicked.connect(self.delete_selected)
         delete_btn.setStyleSheet("""
             QPushButton {
@@ -822,6 +812,11 @@ class AccountManager(QMainWindow):
         self.stats_label = QLabel("0 tài khoản")
         self.stats_label.setStyleSheet("color: #666; font-size: 14px;")
         self.toolbar.addWidget(self.stats_label)
+
+        appearance_btn = QPushButton("Giao diện")
+        appearance_btn.setToolTip("Tùy chỉnh màu sắc, cỡ chữ và mật độ bảng")
+        appearance_btn.clicked.connect(self.open_appearance_settings)
+        self.toolbar.addWidget(appearance_btn)
 
     def create_left_panel(self):
         panel = QFrame()
@@ -1058,35 +1053,114 @@ class AccountManager(QMainWindow):
         return panel
 
     def apply_styles(self):
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #f5f5f5;
-            }
-            QPushButton {
-                border: none;
-                padding: 6px 12px;
-                border-radius: 4px;
-            }
-            QLineEdit {
-                border: 1px solid #ced4da;
-                border-radius: 4px;
-                padding: 6px;
-            }
-            QComboBox {
-                border: 1px solid #ced4da;
-                border-radius: 4px;
-                padding: 6px;
-            }
-            QTableWidget {
-                selection-background-color: #d61718;
-                selection-color: white;
-            }
-            QTableWidget::item:selected {
-                background-color: #d61718;
-                color: white;
-                font-weight: bold;
-            }
+        theme = self.ui_settings.value("theme", "light")
+        accent = self.ui_settings.value("accent", "#d61718")
+        font_size = int(self.ui_settings.value("font_size", 9))
+        compact = self.ui_settings.value("compact", False, type=bool)
+        if theme not in ("light", "dark"):
+            theme = "light"
+        if accent not in ("#d61718", "#2864c5", "#168578"):
+            accent = "#d61718"
+
+        if theme == "dark":
+            bg, surface, text, muted, border, alternate = "#171a21", "#222733", "#edf0f6", "#aab3c2", "#394252", "#1d222c"
+            selected_row, hover_row = "#39414d", "#2b313c"
+        else:
+            bg, surface, text, muted, border, alternate = "#f3f5f8", "#ffffff", "#202633", "#687386", "#dce2ea", "#f5f7fa"
+            selected_row, hover_row = "#e2e6eb", "#f0f2f4"
+
+        # Clear the old per-widget colors so every screen follows the selected theme.
+        for widget in self.findChildren(QWidget):
+            widget.setStyleSheet("")
+        row_padding = 4 if compact else 9
+        self.setStyleSheet(f"""
+            QMainWindow, QWidget {{ background: {bg}; color: {text}; font-size: {font_size}pt; }}
+            QToolBar {{ background: {surface}; border: 0; padding: 10px; spacing: 8px; }}
+            QTabWidget::pane {{ background: {bg}; border: 0; }}
+            QTabBar::tab {{ background: {surface}; color: {muted}; padding: 10px 18px; margin-right: 4px; border: 1px solid {border}; border-bottom: 0; border-top-left-radius: 7px; border-top-right-radius: 7px; }}
+            QTabBar::tab:selected {{ color: {accent}; font-weight: 700; background: {bg}; }}
+            QFrame {{ background: {surface}; border: 1px solid {border}; border-radius: 8px; }}
+            QPushButton {{ background: #b8fff5; color: #102322; border: 1px solid #3ff2d7; padding: 8px 13px; border-radius: 6px; font-weight: 600; }}
+            QPushButton:hover {{ background: #93f7e9; border-color: #20ccb7; color: #102322; }}
+            QPushButton:pressed {{ background: #72ead8; }}
+            QLineEdit, QTextEdit, QComboBox {{ background: {surface}; color: {text}; border: 1px solid {border}; border-radius: 6px; padding: 7px; selection-background-color: {accent}; }}
+            QTextEdit#activityLog {{ font-size: 8pt; }}
+            QLineEdit:focus, QTextEdit:focus, QComboBox:focus {{ border: 2px solid {accent}; }}
+            QTableWidget {{ background: {surface}; alternate-background-color: {alternate}; color: {text}; gridline-color: {border}; border: 1px solid {border}; outline: none; selection-background-color: {selected_row}; selection-color: {text}; }}
+            QHeaderView::section {{ background: {alternate}; color: {text}; padding: {row_padding}px; border: 0; border-bottom: 2px solid {border}; font-weight: 700; }}
+            QTableWidget::item {{ padding: {row_padding}px; border-bottom: 1px solid {border}; }}
+            QTableWidget::item:selected, QTableWidget::item:selected:hover {{ background: {selected_row}; color: {text}; border: 0; }}
+            QTableWidget::item:hover {{ background: {hover_row}; color: {text}; }}
+            QTableWidget::item:focus {{ outline: none; border: 0; }}
+            QGroupBox {{ border: 1px solid {border}; border-radius: 7px; margin-top: 12px; padding: 12px 8px 8px; font-weight: 600; }}
+            QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; }}
+            QStatusBar {{ background: {surface}; color: {muted}; border-top: 1px solid {border}; }}
+            QProgressBar {{ background: {alternate}; border: 0; border-radius: 5px; text-align: center; }}
+            QProgressBar::chunk {{ background: {accent}; border-radius: 5px; }}
+            QMenu {{ background: {surface}; color: {text}; border: 1px solid {border}; }}
+            QMenu::item:selected {{ background: {accent}; color: white; }}
         """)
+
+    def open_appearance_settings(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Tùy chỉnh giao diện")
+        dialog.setMinimumWidth(440)
+        layout = QVBoxLayout(dialog)
+        title = QLabel("Cá nhân hóa không gian làm việc")
+        title.setStyleSheet("font-size: 16pt; font-weight: 700;")
+        layout.addWidget(title)
+        description = QLabel("Lưu trên máy tính này để dùng lại ở lần mở ứng dụng tiếp theo.")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        form = QFormLayout()
+        theme = QComboBox()
+        theme.addItem("Sáng", "light")
+        theme.addItem("Tối", "dark")
+        theme.setCurrentIndex(max(0, theme.findData(self.ui_settings.value("theme", "light"))))
+        form.addRow("Chế độ màu", theme)
+        accent = QComboBox()
+        for label, color in (("Đỏ NAMCO", "#d61718"), ("Xanh dương", "#2864c5"), ("Xanh ngọc", "#168578")):
+            accent.addItem(label, color)
+        accent.setCurrentIndex(max(0, accent.findData(self.ui_settings.value("accent", "#d61718"))))
+        form.addRow("Màu nhấn", accent)
+        font_size = QComboBox()
+        for size, label in ((8, "Nhỏ"), (9, "Tiêu chuẩn"), (10, "Lớn")):
+            font_size.addItem(label, size)
+        font_size.setCurrentIndex(max(0, font_size.findData(int(self.ui_settings.value("font_size", 9)))))
+        form.addRow("Cỡ chữ", font_size)
+        density = QComboBox()
+        density.addItem("Thoáng", False)
+        density.addItem("Gọn", True)
+        density.setCurrentIndex(max(0, density.findData(self.ui_settings.value("compact", False, type=bool))))
+        form.addRow("Mật độ bảng", density)
+        layout.addLayout(form)
+
+        preview = QLabel("Xem trước  ·  Email tài khoản  ·  Đang hoạt động")
+        preview.setMinimumHeight(52)
+        preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview.setStyleSheet(f"border: 1px solid {accent.currentData()}; border-radius: 8px; padding: 8px; color: {accent.currentData()}; font-weight: 600;")
+        accent.currentIndexChanged.connect(lambda: preview.setStyleSheet(f"border: 1px solid {accent.currentData()}; border-radius: 8px; padding: 8px; color: {accent.currentData()}; font-weight: 600;"))
+        layout.addWidget(preview)
+
+        buttons = QDialogButtonBox()
+        save_button = buttons.addButton("Lưu tùy chọn", QDialogButtonBox.ButtonRole.AcceptRole)
+        reset_button = buttons.addButton("Mặc định", QDialogButtonBox.ButtonRole.ResetRole)
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        reset_button.clicked.connect(lambda: (theme.setCurrentIndex(0), accent.setCurrentIndex(0), font_size.setCurrentIndex(1), density.setCurrentIndex(0)))
+        save_button.clicked.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.ui_settings.setValue("theme", theme.currentData())
+            self.ui_settings.setValue("accent", accent.currentData())
+            self.ui_settings.setValue("font_size", font_size.currentData())
+            self.ui_settings.setValue("compact", density.currentData())
+            self.ui_settings.sync()
+            QApplication.setFont(QFont("Segoe UI", int(font_size.currentData())))
+            self.apply_styles()
+            self.status_bar.showMessage("Đã áp dụng giao diện", 3000)
 
     # ============================================================
     # DATA MANAGEMENT
@@ -1257,6 +1331,7 @@ class AccountManager(QMainWindow):
         # Tạo worker
         self.worker = BatchCheckWorker(accounts_to_check)
         self.worker.result_ready.connect(self.on_check_result)
+        self.worker.profile_ready.connect(self.on_profile_ready)
         self.worker.progress.connect(self.on_check_progress)
         self.worker.finished_checking.connect(self.on_check_finished)
         self.worker.start()
@@ -1304,6 +1379,20 @@ class AccountManager(QMainWindow):
                 account.update(profile)
                 self.save_data()
                 self.update_table()
+                profile_fields = {
+                    key: value for key, value in profile.items()
+                    if key not in {"email", "password", "status", "last_check", "profile_fetch_status", "parks2_handoff_status"}
+                    and value not in (None, "")
+                }
+                if profile_fields:
+                    handoff_warning = profile.get("parks2_handoff_status")
+                    message = f"{email}: đã đọc được {len(profile_fields)} trường hồ sơ"
+                    if handoff_warning:
+                        message += f" (cảnh báo handoff: {handoff_warning})"
+                    self.log(message)
+                else:
+                    status = profile.get("profile_fetch_status", "Không có dữ liệu hồ sơ")
+                    self.log(f"{email}: đăng nhập thành công nhưng chưa đọc được hồ sơ ({status})")
                 return
 
     def show_account_details(self, row, column=0):
@@ -1445,6 +1534,10 @@ class AccountManager(QMainWindow):
         change_name_action.triggered.connect(lambda: self.change_account_name(row))
         menu.addAction(change_name_action)
 
+        birthday_action = QAction("Sửa ngày sinh", self)
+        birthday_action.triggered.connect(lambda: self.change_account_dob(row))
+        menu.addAction(birthday_action)
+
         details_action = QAction("Xem thông tin tài khoản", self)
         details_action.triggered.connect(lambda: self.show_account_details(row))
         menu.addAction(details_action)
@@ -1542,27 +1635,49 @@ class AccountManager(QMainWindow):
         self.worker.progress.connect(self.progress_bar.setValue)
         self.worker.start()
         
-        self.log(f"Đang đổi tên: {acc['email']}")
+        self.log(f'\u0110ang c\u1eadp nh\u1eadt h\u1ed3 s\u01a1: {acc["email"]}')
+
+    def change_account_dob(self, row):
+        if row < 0 or row >= len(self.accounts):
+            return
+        account = self.accounts[row]
+        dialog = ChangeDateOfBirthDialog(account.get("dob", ""), self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        new_dob = dialog.get_date()
+        reply = QMessageBox.question(
+            self,
+            "X\u00e1c nh\u1eadn \u0111\u1ed5i ng\u00e0y sinh",
+            f"\u0110\u1ed5i ng\u00e0y sinh c\u1ee7a {account['email']} th\u00e0nh {new_dob}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.execute_change_name(row, account, {"dob": new_dob})
 
     def on_change_name_result(self, row, email, success, message):
-        if success and email in self.pending_name_changes and row < len(self.accounts):
+        if success and email in self.pending_name_changes:
             changed = self.pending_name_changes.pop(email)
-            if changed.get("last_name"):
-                self.accounts[row]["last_name_kanji"] = changed["last_name"]
-            if changed.get("first_name"):
-                self.accounts[row]["first_name_kanji"] = changed["first_name"]
-            self.save_data()
+            account = next((item for item in self.accounts if item.get("email") == email), None)
+            if account:
+                if changed.get("last_name"):
+                    account["last_name_kanji"] = changed["last_name"]
+                if changed.get("first_name"):
+                    account["first_name_kanji"] = changed["first_name"]
+                if changed.get("dob"):
+                    account["dob"] = changed["dob"]
+                self.save_data()
+                self.update_table()
         elif not success:
             self.pending_name_changes.pop(email, None)
-        """Xử lý kết quả đổi tên"""
+
         self.progress_bar.setVisible(False)
-        
         if success:
-            self.log(f"✓ {email}: {message}")
-            QMessageBox.information(self, "Thành công", f"Đổi tên thành công!\n{email}")
+            self.log(f"\u2713 {email}: {message}")
+            QMessageBox.information(self, "Th\u00e0nh c\u00f4ng", f"C\u1eadp nh\u1eadt h\u1ed3 s\u01a1 th\u00e0nh c\u00f4ng!\n{email}")
         else:
-            self.log(f"✗ {email}: {message}")
-            QMessageBox.warning(self, "Thất bại", f"Đổi tên thất bại!\n{message}")
+            self.log(f"\u2717 {email}: {message}")
+            QMessageBox.warning(self, "Th\u1ea5t b\u1ea1i", f"C\u1eadp nh\u1eadt h\u1ed3 s\u01a1 th\u1ea5t b\u1ea1i!\n{message}")
 
     def closeEvent(self, event):
         # Dừng tất cả workers
@@ -1579,7 +1694,7 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     
     # Set font
-    font = QFont("Segoe UI", 10)
+    font = QFont("Segoe UI", 9)
     app.setFont(font)
     
     window = AccountManager()

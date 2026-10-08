@@ -28,3 +28,7 @@ The app calls BANDAI NAMCO ID `v3/login/idpw`, then `v3/passkey/info`. When that
 ## Local account data
 
 The app writes credentials and profile data to `accounts_data.json` in plaintext. Keep this file private. It is excluded from Git by `.gitignore`; never commit it or session cookie files.
+
+## GitHub update workflow
+
+After every project update or modification, validate the changed files, commit the intended project files, and push the update to the configured GitHub remote. Keep `accounts_data.json`, session cookies, and other secrets out of commits. Report the commit and push result after each update.

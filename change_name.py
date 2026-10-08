@@ -22,7 +22,12 @@ def complete_parks2_handoff(session, headers, redirect_url, language):
     code = query.get("code", [""])[0]
     if not code:
         return False
-    params = {key: query.get(key, [""])[0] for key in ("client_id", "backto", "redirect_uri", "customize_id")}
+    params = {
+        "client_id": query.get("client_id", [""])[0] or CLIENT_ID,
+        "backto": query.get("backto", [""])[0],
+        "redirect_uri": query.get("redirect_uri", [""])[0] or REDIRECT_URI,
+        "customize_id": query.get("customize_id", [""])[0],
+    }
     params.update(code=code, language=language, cookie=json.dumps(session.cookies.get_dict()))
     handoff_headers = dict(headers)
     handoff_headers["X-Requested-With"] = "XMLHttpRequest"
@@ -55,7 +60,7 @@ def complete_parks2_handoff(session, headers, redirect_url, language):
     callback = session.get(next_url, headers=callback_headers, timeout=30, allow_redirects=True)
     return callback.status_code < 400 and "parks2.bandainamco-am.co.jp" in urlparse(callback.url).netloc
 
-def change_name(email, password, new_last_name, new_first_name=None, new_last_kana=None, new_first_kana=None, new_nickname=None):
+def change_name(email, password, new_last_name, new_first_name=None, new_last_kana=None, new_first_kana=None, new_nickname=None, new_dob=None):
     """
     Đổi tên tài khoản NAMCO Parks
     
@@ -220,6 +225,13 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
     for name, value in hidden_inputs:
         if name not in form_data:
             form_data[name] = value
+
+    if new_dob:
+        dob_parts = re.fullmatch(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})", new_dob.strip())
+        if not dob_parts:
+            return {"success": False, "message": "Ngày sinh phải theo định dạng YYYY/MM/DD"}
+        year, month, day = dob_parts.groups()
+        form_data.update({"year": year, "month": month, "day": day})
     
     # Thêm các trường trim
     form_data["jp.co.interfactory.framework.trim.L_NAME"] = ""
@@ -227,6 +239,10 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
     form_data["jp.co.interfactory.framework.trim.L_KANA"] = ""
     form_data["jp.co.interfactory.framework.trim.F_KANA"] = ""
     form_data["jp.co.interfactory.framework.trim.NICKNAME"] = ""
+    if new_dob:
+        form_data["jp.co.interfactory.framework.trim.year"] = ""
+        form_data["jp.co.interfactory.framework.trim.month"] = ""
+        form_data["jp.co.interfactory.framework.trim.day"] = ""
     
     # Tìm nút submit
     submit_match = re.search(r'<input[^>]*type="submit"[^>]*name="([^"]*)"[^>]*value="([^"]*)"', html)
