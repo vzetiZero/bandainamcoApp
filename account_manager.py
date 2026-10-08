@@ -7,7 +7,7 @@ import re
 from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import urlparse, parse_qs
-from datetime import datetime
+from datetime import datetime, timedelta
 import webbrowser
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -669,6 +669,64 @@ class AccountDetailsDialog(QDialog):
         }
 
 
+CAMPAIGN_TIME_FORMATS = ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d")
+CAMPAIGN_STATUS_UNDETERMINED = "Chưa rõ"
+CAMPAIGN_STATUS_NOT_STARTED = "Chưa mở"
+CAMPAIGN_STATUS_OPEN = "Đang mở"
+CAMPAIGN_STATUS_CLOSED = "Đã đóng"
+CAMPAIGN_SOON_WINDOW = timedelta(hours=24)
+CAMPAIGN_STATUS_COLORS = {
+    CAMPAIGN_STATUS_OPEN: "#28a745",
+    CAMPAIGN_STATUS_NOT_STARTED: "#c8860d",
+    CAMPAIGN_STATUS_CLOSED: "#8a94a6",
+    CAMPAIGN_STATUS_UNDETERMINED: "#8a94a6",
+}
+
+
+def parse_campaign_time(text):
+    """Parse 'YYYY-MM-DD HH:MM' and friends into datetime; None when blank or invalid."""
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    for fmt in CAMPAIGN_TIME_FORMATS:
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def campaign_status(campaign, now=None):
+    """Derive a campaign's state from its open/close times."""
+    now = now or datetime.now()
+    opens_at = parse_campaign_time(campaign.get("opens_at"))
+    closes_at = parse_campaign_time(campaign.get("closes_at"))
+    if opens_at is None and closes_at is None:
+        return CAMPAIGN_STATUS_UNDETERMINED
+    if closes_at is not None and closes_at <= now:
+        return CAMPAIGN_STATUS_CLOSED
+    if opens_at is not None and opens_at > now:
+        return CAMPAIGN_STATUS_NOT_STARTED
+    return CAMPAIGN_STATUS_OPEN
+
+
+def format_campaign_remaining(campaign, now=None):
+    """Human-readable countdown to the next deadline, or an empty string."""
+    now = now or datetime.now()
+    opens_at = parse_campaign_time(campaign.get("opens_at"))
+    closes_at = parse_campaign_time(campaign.get("closes_at"))
+    if campaign_status(campaign, now) == CAMPAIGN_STATUS_UNDETERMINED:
+        return ""
+    target = opens_at if opens_at and opens_at > now else closes_at
+    if target is None:
+        return ""
+    delta = target - now
+    days, seconds = divmod(int(abs(delta).total_seconds()), 86400)
+    hours, _ = divmod(seconds, 3600)
+    span = "%dd" % days if hours == 0 else ("%dd %dh" % (days, hours) if days else "%dh" % hours)
+    return "còn %s" % span if delta.total_seconds() > 0 else "quá hạn %s" % span
+
+
 class CampaignDialog(QDialog):
     def __init__(self, campaign=None, parent=None):
         super().__init__(parent)
@@ -683,17 +741,36 @@ class CampaignDialog(QDialog):
         self.notes_input = QTextEdit()
         self.notes_input.setPlainText(campaign.get("notes", ""))
         self.notes_input.setMaximumHeight(120)
-        self.open_input.setPlaceholderText("YYYY-MM-DD HH:MM")
-        self.close_input.setPlaceholderText("YYYY-MM-DD HH:MM")
+        for field in (self.open_input, self.close_input):
+            field.setPlaceholderText("YYYY-MM-DD HH:MM")
         layout.addRow("Tên chiến dịch:", self.name_input)
         layout.addRow("Link chính thức:", self.url_input)
         layout.addRow("Mở đăng ký:", self.open_input)
         layout.addRow("Đóng đăng ký:", self.close_input)
         layout.addRow("Ghi chú thể lệ:", self.notes_input)
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self.validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
+
+    def validate_and_accept(self):
+        """Reject bad dates here so bad data never reaches storage."""
+        for label, field in (("Mở đăng ký", self.open_input), ("Đóng đăng ký", self.close_input)):
+            if field.text().strip() and parse_campaign_time(field.text()) is None:
+                QMessageBox.warning(
+                    self, "Thông tin chưa hợp lệ",
+                    "%s sai định dạng. Dùng YYYY-MM-DD HH:MM, ví dụ 2026-10-20 10:00." % label,
+                )
+                return
+        opens_at = parse_campaign_time(self.open_input.text())
+        closes_at = parse_campaign_time(self.close_input.text())
+        if opens_at and closes_at and closes_at <= opens_at:
+            QMessageBox.warning(
+                self, "Thông tin chưa hợp lệ",
+                "Thời gian đóng đăng ký phải sau thời gian mở đăng ký.",
+            )
+            return
+        self.accept()
 
     def get_campaign(self):
         return {
@@ -768,6 +845,7 @@ class AccountManager(QMainWindow):
         list_layout.addWidget(log_panel, 1)
         self.tab_widget.addTab(self.list_tab, load_svg_icon(AppIcons.FOLDER_OPEN, 16), "Danh sách tài khoản")
         self.campaigns = []
+        self.campaign_states = {}   # row -> trạng thái, để cảnh báo mở đăng ký đúng 1 lần
         self.campaign_tab = self.create_campaign_tab()
         self.tab_widget.addTab(self.campaign_tab, load_svg_icon(AppIcons.CHECK, 16), "Chi\u1ebfn d\u1ecbch")
 
@@ -790,30 +868,62 @@ class AccountManager(QMainWindow):
         heading = QLabel("Qu\u1ea3n l\u00fd chi\u1ebfn d\u1ecbch")
         heading.setStyleSheet("font-size: 14pt; font-weight: 700;")
         layout.addWidget(heading)
-        explanation = QLabel("L\u01b0u link v\u00e0 th\u1eddi gian t\u1eebng\u00a0\u0111\u1ee3t. M\u1edf trang ch\u00ednh th\u1ee9c \u0111\u1ec3 t\u1ef1 xem th\u1ec3 l\u1ec7 v\u00e0 \u0111\u0103ng k\u00fd.")
+        explanation = QLabel(
+            "Mỗi chiến dịch là một dòng riêng. Trạng thái được tính tự động từ thời gian "
+            "mở/đóng đăng ký, nên chỉ cần thêm dòng khi có chiến dịch mới và sửa khi link "
+            "hoặc ngày của chính chiến dịch đó thay đổi. Để trống ngày nếu không xác định."
+        )
         explanation.setWordWrap(True)
         layout.addWidget(explanation)
 
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("Lọc:"))
+        self.campaign_filter_combo = QComboBox()
+        for label, key in (("Tất cả", "all"), ("Đang mở", CAMPAIGN_STATUS_OPEN),
+                           ("Sắp mở trong 24h", "soon"), ("Chưa mở", CAMPAIGN_STATUS_NOT_STARTED),
+                           ("Đã đóng", CAMPAIGN_STATUS_CLOSED),
+                           ("Chưa rõ ngày", CAMPAIGN_STATUS_UNDETERMINED)):
+            self.campaign_filter_combo.addItem(label, key)
+        self.campaign_filter_combo.currentIndexChanged.connect(self.apply_campaign_filter)
+        filter_row.addWidget(self.campaign_filter_combo)
+        filter_row.addWidget(QLabel("Tìm:"))
+        self.campaign_search_input = QLineEdit()
+        self.campaign_search_input.setPlaceholderText("Tên hoặc link")
+        self.campaign_search_input.textChanged.connect(self.apply_campaign_filter)
+        filter_row.addWidget(self.campaign_search_input, 1)
+        layout.addLayout(filter_row)
+
         actions = QHBoxLayout()
-        for label, handler in (("Th\u00eam chi\u1ebfn d\u1ecbch", self.add_campaign), ("S\u1eeda", self.edit_campaign),
-                               ("M\u1edf trang ch\u00ednh th\u1ee9c", self.open_campaign), ("X\u00f3a", self.delete_campaign)):
+        for label, handler in (("Thêm chiến dịch", self.add_campaign), ("Sửa", self.edit_campaign),
+                               ("Mở trang chính thức", self.open_campaign),
+                               ("Xóa", self.delete_campaign),
+                               ("Export danh sách", self.export_campaigns)):
             button = QPushButton(label)
             button.clicked.connect(handler)
             actions.addWidget(button)
         actions.addStretch(1)
+        self.campaign_summary_label = QLabel("")
+        actions.addWidget(self.campaign_summary_label)
         layout.addLayout(actions)
 
-        self.campaign_table = QTableWidget(0, 5)
-        self.campaign_table.setHorizontalHeaderLabels(["T\u00ean", "Link", "M\u1edf \u0111\u0103ng k\u00fd", "\u0110\u00f3ng \u0111\u0103ng k\u00fd", "Ghi ch\u00fa"])
+        self.campaign_table = QTableWidget(0, 7)
+        self.campaign_table.setHorizontalHeaderLabels(
+            ["Tên", "Link", "Mở đăng ký", "Đóng đăng ký", "Trạng thái", "Còn lại", "Ghi chú"])
         self.campaign_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.campaign_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.campaign_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.campaign_table.setAlternatingRowColors(True)
         for col, mode in enumerate((QHeaderView.ResizeMode.ResizeToContents, QHeaderView.ResizeMode.Stretch,
                                     QHeaderView.ResizeMode.ResizeToContents, QHeaderView.ResizeMode.ResizeToContents,
+                                    QHeaderView.ResizeMode.ResizeToContents, QHeaderView.ResizeMode.ResizeToContents,
                                     QHeaderView.ResizeMode.Stretch)):
             self.campaign_table.horizontalHeader().setSectionResizeMode(col, mode)
         layout.addWidget(self.campaign_table, 1)
+
+        # Làm mới trạng thái định kỳ để không phải bấm tay khi tới giờ mở/đóng
+        self.campaign_timer = QTimer(self)
+        self.campaign_timer.timeout.connect(self.refresh_campaign_table)
+        self.campaign_timer.start(60_000)
         return tab
 
     # ============================================================
@@ -1037,16 +1147,112 @@ class AccountManager(QMainWindow):
         self.status_bar.showMessage("Kiểm tra proxy: %d hoạt động" % working, 5000)
 
     def refresh_campaign_table(self):
+        """Redraw the campaign table, deriving status and countdown from the dates."""
+        now = datetime.now()
+        previous_states = getattr(self, "campaign_states", {})
+        states = {}
         self.campaign_table.setRowCount(len(self.campaigns))
-        keys = ("name", "url", "opens_at", "closes_at", "notes")
         for row, campaign in enumerate(self.campaigns):
-            for col, key in enumerate(keys):
-                self.campaign_table.setItem(row, col, QTableWidgetItem(campaign.get(key, "")))
+            status = campaign_status(campaign, now)
+            states[row] = status
+            remaining = format_campaign_remaining(campaign, now)
+            values = [
+                campaign.get("name", ""),
+                campaign.get("url", ""),
+                campaign.get("opens_at", ""),
+                campaign.get("closes_at", ""),
+                status,
+                remaining,
+                campaign.get("notes", ""),
+            ]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if col == 4:
+                    item.setForeground(QColor(CAMPAIGN_STATUS_COLORS.get(status, "#8a94a6")))
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                elif col == 5:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.campaign_table.setItem(row, col, item)
+        self.campaign_states = states
+        self.update_campaign_summary(previous_states)
+        self.apply_campaign_filter()
+
+    def update_campaign_summary(self, previous_states=None):
+        """Show how many campaigns are live, and warn once when one opens within 24h."""
+        counts = {}
+        for status in self.campaign_states.values():
+            counts[status] = counts.get(status, 0) + 1
+        summary = "Tổng %d" % len(self.campaigns)
+        for status in (CAMPAIGN_STATUS_OPEN, CAMPAIGN_STATUS_NOT_STARTED,
+                       CAMPAIGN_STATUS_CLOSED, CAMPAIGN_STATUS_UNDETERMINED):
+            if counts.get(status):
+                summary += "  ·  %s %d" % (status, counts[status])
+        self.campaign_summary_label.setText(summary)
+
+        now = datetime.now()
+        for row, status in self.campaign_states.items():
+            if status != CAMPAIGN_STATUS_NOT_STARTED:
+                continue
+            opens_at = parse_campaign_time(self.campaigns[row].get("opens_at"))
+            if opens_at is None or opens_at - now > CAMPAIGN_SOON_WINDOW:
+                continue
+            if previous_states and previous_states.get(row) == status:
+                continue
+            name = self.campaigns[row].get("name") or "(chưa đặt tên)"
+            message = "Chiến dịch %s mở đăng ký lúc %s" % (name, opens_at.strftime("%d/%m %H:%M"))
+            self.status_bar.showMessage(message, 15000)
+            self.log(message)
+
+    def apply_campaign_filter(self, *args):
+        """Hide rows that do not match the status filter and the search text."""
+        selected = self.campaign_filter_combo.currentData()
+        search_text = self.campaign_search_input.text().strip().lower()
+        now = datetime.now()
+        for row in range(self.campaign_table.rowCount()):
+            campaign = self.campaigns[row] if row < len(self.campaigns) else {}
+            status = self.campaign_states.get(row, campaign_status(campaign, now))
+            show = True
+            if selected == "soon":
+                opens_at = parse_campaign_time(campaign.get("opens_at"))
+                show = (status == CAMPAIGN_STATUS_NOT_STARTED and opens_at is not None
+                        and opens_at - now <= CAMPAIGN_SOON_WINDOW)
+            elif selected != "all" and selected != status:
+                show = False
+            if show and search_text:
+                haystack = "%s %s" % (campaign.get("name", ""), campaign.get("url", ""))
+                show = search_text in haystack.lower()
+            self.campaign_table.setRowHidden(row, not show)
+
+    def export_campaigns(self):
+        """Write the campaign list to a pipe-separated text file."""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Export danh sách chiến dịch", "campaigns_export.txt", "Text Files (*.txt)"
+        )
+        if not file_path:
+            return
+        now = datetime.now()
+        try:
+            with open(file_path, "w", encoding="utf-8") as fh:
+                fh.write("# Tên | Mở | Đóng | Trạng thái | Còn lại | Link | Ghi chú\n")
+                for campaign in self.campaigns:
+                    fh.write("|".join([
+                        campaign.get("name", ""),
+                        campaign.get("opens_at", ""),
+                        campaign.get("closes_at", ""),
+                        campaign_status(campaign, now),
+                        format_campaign_remaining(campaign, now),
+                        campaign.get("url", ""),
+                        campaign.get("notes", "").replace("\n", " "),
+                    ]) + "\n")
+            self.log("Đã export %d chiến dịch" % len(self.campaigns))
+            QMessageBox.information(self, "Hoàn tất", "Đã export đến:\n%s" % file_path)
+        except OSError as exc:
+            QMessageBox.critical(self, "Lỗi", "Không thể export: %s" % exc)
 
     def selected_campaign_row(self):
         row = self.campaign_table.currentRow()
         if row < 0 or row >= len(self.campaigns):
-            QMessageBox.information(self, "Chi\u1ebfn d\u1ecbch", "H\u00e3y ch\u1ecdn m\u1ed9t chi\u1ebfn d\u1ecbch tr\u01b0\u1edbc.")
+            QMessageBox.information(self, "Chiến dịch", "Hãy chọn một chiến dịch trước.")
             return None
         return row
 
@@ -1061,7 +1267,7 @@ class AccountManager(QMainWindow):
             return
         campaign = dialog.get_campaign()
         if not campaign["name"] or urlparse(campaign["url"]).scheme not in {"http", "https"}:
-            QMessageBox.warning(self, "Th\u00f4ng tin ch\u01b0a h\u1ee3p l\u1ec7", "Nh\u1eadp t\u00ean chi\u1ebfn d\u1ecbch v\u00e0 link http:// ho\u1eb7c https://.")
+            QMessageBox.warning(self, "Thông tin chưa hợp lệ", "Nhập tên chiến dịch và link http:// hoặc https://.")
             return
         self.campaigns.append(campaign)
         self.save_campaigns()
@@ -1075,7 +1281,7 @@ class AccountManager(QMainWindow):
             return
         campaign = dialog.get_campaign()
         if not campaign["name"] or urlparse(campaign["url"]).scheme not in {"http", "https"}:
-            QMessageBox.warning(self, "Th\u00f4ng tin ch\u01b0a h\u1ee3p l\u1ec7", "Nh\u1eadp t\u00ean chi\u1ebfn d\u1ecbch v\u00e0 link http:// ho\u1eb7c https://.")
+            QMessageBox.warning(self, "Thông tin chưa hợp lệ", "Nhập tên chiến dịch và link http:// hoặc https://.")
             return
         self.campaigns[row] = campaign
         self.save_campaigns()
@@ -1089,8 +1295,14 @@ class AccountManager(QMainWindow):
         row = self.selected_campaign_row()
         if row is None:
             return
-        del self.campaigns[row]
-        self.save_campaigns()
+        name = self.campaigns[row].get("name") or "(chưa đặt tên)"
+        reply = QMessageBox.question(
+            self, "Xác nhận", "Xóa chiến dịch %s?" % name, QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            del self.campaigns[row]
+            self.save_campaigns()
+
 
     def create_toolbar(self):
         self.toolbar = QToolBar()

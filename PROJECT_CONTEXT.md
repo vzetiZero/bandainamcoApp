@@ -84,56 +84,111 @@ màu trong `apply_styles()`. **Không** dùng `setStyleSheet()` trực tiếp tr
 
 ## 3. Logic tab Chiến dịch
 
-**Mục đích:** lưu danh sách link chiến dịch (link đăng ký thời gian giới hạn) để
-nhắc nhở và tra cứu. Đây là **sổ tay thủ công**, app **không** tự động đăng ký hộ.
+**Mục đích:** lưu danh sách link chiến dịch (link đăng ký 抽選 thời gian giới hạn) để
+nhìn nhanh chiến dịch nào đang hiệu lực. Đây là **sổ tay**, app **không** tự động
+đăng ký hộ (xem mục 10.9).
 
-### Cấu trúc dữ liệu — 5 trường
+**Mô hình dữ liệu: mỗi chiến dịch là một dòng riêng.** Không cần cập nhật liên tục.
+Thêm một dòng khi có chiến dịch mới, giữ dòng cũ để tra cứu, chỉ sửa khi link hoặc ngày
+của chính chiến dịch đó thay đổi. Trạng thái được **tính từ ngày**, không phải nhập tay.
+
+### Cấu trúc dữ liệu — 5 trường lưu trữ
 
 | Key | Cột hiển thị | Quy tắc |
 |---|---|---|
 | `name` | Tên | Bắt buộc, không rỗng |
 | `url` | Link | Bắt buộc, scheme phải là `http` hoặc `https` |
-| `opens_at` | Mở đăng ký | Chuỗi tự do, gợi ý `YYYY-MM-DD HH:MM` |
-| `closes_at` | Đóng đăng ký | Chuỗi tự do, gợi ý `YYYY-MM-DD HH:MM` |
+| `opens_at` | Mở đăng ký | `YYYY-MM-DD HH:MM`, để trống nếu chưa công bố |
+| `closes_at` | Đóng đăng ký | `YYYY-MM-DD HH:MM`, để trống nếu chưa công bố |
 | `notes` | Ghi chú | Tự do, `QTextEdit` giới hạn 120px |
+
+Hai cột **Trạng thái** và **Còn lại** không lưu — chúng tính lại mỗi lần vẽ bảng.
+
+### Hàm module-level (logic thuần, không đụng UI)
+
+```python
+CAMPAIGN_STATUS_OPEN          = "Đang mở"
+CAMPAIGN_STATUS_NOT_STARTED   = "Chưa mở"
+CAMPAIGN_STATUS_CLOSED        = "Đã đóng"
+CAMPAIGN_STATUS_UNDETERMINED  = "Chưa rõ"
+CAMPAIGN_SOON_WINDOW          = timedelta(hours=24)
+CAMPAIGN_STATUS_COLORS        = {...}
+
+parse_campaign_time(text)                 # -> datetime | None
+campaign_status(campaign, now=None)       # -> 1 trong 4 trạng thái
+format_campaign_remaining(campaign, now)  # -> "còn 3h" / "quá hạn 4d"
+```
+
+`parse_campaign_time` nhận `%Y-%m-%d %H:%M`, `%Y-%m-%d %H:%M:%S`, `%Y-%m-%d`; trả
+`None` cho chuỗi rác hoặc rỗng. `campaign_status` xử lý đúng 4 ca: không có ngày nào →
+Chưa rõ; quá `closes_at` → Đã đóng; chưa tới `opens_at` → Chưa mở; còn lại → Đang mở.
+
+### Bảng — 7 cột
+
+`Tên | Link | Mở đăng ký | Đóng đăng ký | Trạng thái | Còn lại | Ghi chú`
+
+Cột **Trạng thái** tô màu theo `CAMPAIGN_STATUS_COLORS`. Cột **Còn lại** đếm ngược tới
+mốc kế tiếp (`opens_at` nếu chưa tới giờ, ngược lại `closes_at`).
 
 ### Vòng đời
 
 ```
-add_campaign()   → CampaignDialog → get_campaign() → validate → append → save_campaigns()
-edit_campaign()  → selected_campaign_row() → CampaignDialog(campaign) → validate → gán đè → save
-delete_campaign()→ selected_campaign_row() → del campaigns[row] → save
-open_campaign()  → selected_campaign_row() → webbrowser.open(url)   # không validate lại
+add_campaign()    → CampaignDialog → validate_and_accept() → validate name/url → append → save
+edit_campaign()   → selected_campaign_row() → CampaignDialog(campaign) → validate → gán đè → save
+delete_campaign() → selected_campaign_row() → QMessageBox hỏi → del → save
+open_campaign()   → selected_campaign_row() → webbrowser.open(url)
+export_campaigns()→ QFileDialog → ghi file "|" ngăn cách
 ```
 
-### Hàm cốt lõi
+`CampaignDialog.validate_and_accept()` chặn **trước khi** dữ liệu vào bộ nhớ: sai
+định dạng ngày thì báo, và `closes_at <= opens_at` thì báo. Bỏ trống cả hai ngày thì hợp lệ
+(trạng thái Chưa rõ).
 
-| Hàm | Dòng | Trách nhiệm |
-|---|---|---|
-| `create_campaign_tab()` | 785 | Dựng group nút + `campaign_table` 5 cột, chỉ đọc (NoEditTriggers), chọn 1 dòng |
-| `refresh_campaign_table()` | 1039 | Vẽ lại bảng từ `self.campaigns`, cố định thứ tự key `("name","url","opens_at","closes_at","notes")` |
-| `selected_campaign_row()` | 1046 | Trả index dòng đang chọn, hoặc `None` + hộp thoại nhắc |
-| `save_campaigns()` | 1053 | `QSettings.setValue("campaigns", json.dumps(...))` → `sync()` → refresh bảng |
-| `add_campaign()` / `edit_campaign()` | 1058 / 1069 | Validate `name` khác rỗng **và** `urlparse(url).scheme in {"http","https"}` |
-| `open_campaign()` | 1083 | `webbrowser.open()` — mở trình duyệt mặc định |
-| `delete_campaign()` | 1088 | Xóa không hỏi lại (khác `delete_single_account` vốn có confirm) |
+### Hàm cốt lõi trong `AccountManager`
 
-### Lưu trữ
+| Hàm | Trách nhiệm |
+|---|---|
+| `create_campaign_tab()` | Dựng hàng lọc + hàng nút + bảng 7 cột + `campaign_timer` |
+| `refresh_campaign_table()` | Vẽ lại bảng, tạo `self.campaign_states` (row → trạng thái) |
+| `update_campaign_summary()` | Dòng tổng kết + **cảnh báo sắp mở trong 24h, mỗi chiến dịch đúng 1 lần** |
+| `apply_campaign_filter()` | `setRowHidden` theo combo lọc + ô tìm kiếm tên/link |
+| `export_campaigns()` | Ghi file txt phân cách bằng `\|`, có dòng header |
+| `selected_campaign_row()` | Index dòng đang chọn, hoặc `None` + hộp thoại nhắc |
+| `save_campaigns()` | Ghi QSettings → `sync()` → refresh |
+| `add_campaign()` / `edit_campaign()` | Validate `name` khác rỗng và `urlparse(url).scheme in {"http","https"}` |
+
+### Lọc và tìm kiếm
+
+| Giá trị combo | Ý nghĩa |
+|---|---|
+| `all` | Tất cả |
+| `Đang mở` | Chỉ trạng thái Đang mở |
+| `soon` | Chưa mở **và** cách `opens_at` ≤ 24h |
+| `Chưa mở` / `Đã đóng` / `Chưa rõ` | Lọc theo trạng thái |
+
+`apply_campaign_filter` dùng `setRowHidden` nên chỉ ẩn dòng, **không** xoá khỏi
+`self.campaigns` — index bảng luôn khớp index list.
+
+### Làm mới theo thời gian
+
+`QTimer` 60 giây gọi `refresh_campaign_table()`. Nhờ vậy sang nửa đêm hoặc tới giờ mở
+thì trạng thái tự đổi, không cần bấm tay. `campaign_states` giữ trạng thái của lần vẽ
+trước để cảnh báo chỉ bắn một lần cho mỗi chiến dịch.
+
+### Lưu trữ và tương thích dữ liệu cũ
 
 - Biến trong RAM: `self.campaigns` (list[dict]).
-- Lưu: `QSettings("NAMCO", "AccountManager")` key `campaigns`, giá trị là **chuỗi
-  JSON** (`ensure_ascii=False`).
-- Nạp: trong `load_data()`, `json.loads()`, có chống lỗi: nếu không phải list thì
-  reset `[]` và vẽ lại bảng.
-- Không nằm trong `accounts_data.json`.
+- Lưu: `QSettings("NAMCO", "AccountManager")` key `campaigns`, **chuỗi JSON**
+  (`ensure_ascii=False`).
+- Nạp trong `load_data()`, chống lỗi JSON hỏng (reset `[]`).
+- Dữ liệu cũ ghi ngày dạng text tự do vẫn đọc được: `parse_campaign_time` trả `None`
+  → hiển thị "Chưa rõ". Sửa lại qua nút **Sửa** là chuyển sang trạng thái thật.
 
-### Đặc điểm cần biết (giới hạn hiện tại)
+### Giới hạn còn lại
 
-- `opens_at` / `closes_at` **chỉ là text tự do**, không validate ngày, không so sánh,
-  không cảnh báo chiến dịch sắp mở/đóng.
-- Không có sắp xếp, không có import/export từ file.
-- `open_campaign()` không kiểm tra chiến dịch đã đóng.
-- Bảng không có cột trạng thái (chưa/khá mở/đã đóng).
+- Không có sắp xếp cột, không chọn nhiều dòng để xoá.
+- Không có import từ file (chỉ export).
+- Cảnh báo hiện status bar + nhật ký, không có popup.
 
 ---
 
@@ -350,6 +405,7 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 | Đổi tên qua form | `e65bc6f` | Regex trên HTML |
 | Lọc/tìm kiếm, context menu, export | `329f7e1` | |
 | Tab Chiến dịch | `86dcac5` | CRUD thủ công |
+| Trạng thái + lọc + cảnh báo chiến dịch | xem git log | Tính từ ngày, không nhập tay |
 | Proxy cho mọi request | `6ccd2d3` | + tab Cấu hình, kiểm tra proxy |
 | env_info khớp User-Agent | `10d8598` | |
 | Màu cột Status | `10d8598` | Sửa bug so chuỗi không dấu |
@@ -368,8 +424,9 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 
 | Hạng mục | Mô tả | Mức độ ưu tiên |
 |---|---|---|
-| Tự động hoá chiến dịch | Theo dõi `opens_at`/`closes_at`, cảnh báo sắp mở/đóng, lọc "còn hiệu lực" | Cao |
-| Import/export chiến dịch | Nạp/ghi CSV, JSON từ file | Trung bình |
+| Trợ lý mở chiến dịch kèm tài khoản | Mở link 抽選 + điền sẵn email/mật khẩu, người dùng tự bấm submit | Cao |
+| Ghi nhận tài khoản đã đăng ký | Đánh dấu (email, chiến dịch) sau khi đăng ký xong | Cao |
+| Import chiến dịch từ file | Nạp CSV/JSON (đã có export) | Trung bình |
 | Sắp xếp bảng chiến dịch | Sort theo tên / thời gian | Thấp |
 | Xoá nhiều chiến dịch | Chọn nhiều dòng | Thấp |
 | Lọc proxy đã chết | Tự loại proxy báo lỗi khỏi danh sách dùng | Cao |
@@ -393,3 +450,6 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 6. Style widget tĩnh phải khai báo trong `apply_styles()` qua `objectName`.
 7. `USER_AGENT` là nguồn duy nhất cho cả header lẫn `env_info.ua`.
 8. Chỉ sửa `last_name_kanji` / `first_name_kanji` qua `AccountDetailsDialog`.
+9. Không viết automation tự điền form và submit đăng ký hàng loạt vào trang 抽選.
+   Đã trình bày với người dùng và được xác nhận giữ nguyên quan điểm này. Phần được
+   phép là trợ lý *mở link + điền sẵn cho một tài khoản*, người dùng tự bấm submit.
