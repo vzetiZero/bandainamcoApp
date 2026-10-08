@@ -37,6 +37,9 @@ CLIENT_ID = "namcoparks_onlinestore"
 REDIRECT_URI = "https://parks2.bandainamco-am.co.jp/member_regist_new.html?backto=top"
 DATA_FILE = "accounts_data.json"
 PROXY_FORMAT_HINT = "ip:port:username:pass"
+# env_info.ua phải khớp chính xác header User-Agent, nếu không client tự mâu thuẫn về thiết bị của mình
+USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 
 def fetch_edit_profile(session, headers):
@@ -259,7 +262,7 @@ class LoginWorker(QThread):
             session = new_session()
             
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": USER_AGENT,
                 "Accept": "application/json, text/javascript, */*; q=0.01",
                 "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
                 "Origin": "https://account.bandainamcoid.com",
@@ -280,7 +283,7 @@ class LoginWorker(QThread):
             
             # Đăng nhập
             env_info = json.dumps({
-                "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "ua": USER_AGENT,
                 "lang": language,
                 "plat": "Win32",
                 "sw": 1920,
@@ -1819,10 +1822,13 @@ class AccountManager(QMainWindow):
                     value = account.get(key)
                     value = "" if value is None else str(value)
                 item = QTableWidgetItem(value)
-                if key == "status" and "Hoat" in value:
-                    item.setForeground(QColor("#28a745"))
-                elif key == "status" and "Khong" in value:
-                    item.setForeground(QColor("#dc3545"))
+                if key == "status":
+                    if value == "Hoạt động":
+                        item.setForeground(QColor("#28a745"))
+                    elif value == "Không hoạt động":
+                        item.setForeground(QColor("#dc3545"))
+                    else:
+                        item.setForeground(QColor("#8a94a6"))
                 self.table.setItem(row, column, item)
         self.stats_label.setText(f"{len(self.accounts)} accounts")
     def apply_filter(self):

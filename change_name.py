@@ -20,6 +20,9 @@ LOGIN_URL = "https://account.bandainamcoid.com/login.html"
 CLIENT_ID = "namcoparks_onlinestore"
 REDIRECT_URI = "https://parks2.bandainamco-am.co.jp/member_regist_new.html?backto=top"
 MEMBER_REGIST_URL = "https://parks2.bandainamco-am.co.jp/member_regist.html?request=edit"
+# env_info.ua phải khớp chính xác header User-Agent, nếu không client tự mâu thuẫn về thiết bị của mình
+USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 
 def complete_parks2_handoff(session, headers, redirect_url, language):
@@ -86,7 +89,7 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
     session = new_session()
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": USER_AGENT,
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
         "Origin": "https://account.bandainamcoid.com",
@@ -109,7 +112,7 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
         language = session.cookies.get("language", "ja")
 
         env_info = json.dumps({
-            "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "ua": USER_AGENT,
             "lang": language,
             "plat": "Win32",
             "sw": 1920,
