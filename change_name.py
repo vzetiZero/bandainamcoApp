@@ -8,25 +8,65 @@ from urllib.parse import urlparse, parse_qs
 # Fix encoding cho Windows console
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-# Cáº¥u hÃ¬nh
+# Cấu hình
 API_URL = "https://account-api.bandainamcoid.com/"
 LOGIN_URL = "https://account.bandainamcoid.com/login.html"
 CLIENT_ID = "namcoparks_onlinestore"
 REDIRECT_URI = "https://parks2.bandainamco-am.co.jp/member_regist_new.html?backto=top"
 MEMBER_REGIST_URL = "https://parks2.bandainamco-am.co.jp/member_regist.html?request=edit"
 
+
+def complete_parks2_handoff(session, headers, redirect_url, language):
+    """Follow BANDAI NAMCO's offered later URL without creating a passkey."""
+    query = parse_qs(urlparse(redirect_url or "").query)
+    code = query.get("code", [""])[0]
+    if not code:
+        return False
+    params = {key: query.get(key, [""])[0] for key in ("client_id", "backto", "redirect_uri", "customize_id")}
+    params.update(code=code, language=language, cookie=json.dumps(session.cookies.get_dict()))
+    handoff_headers = dict(headers)
+    handoff_headers["X-Requested-With"] = "XMLHttpRequest"
+    handoff_headers["Referer"] = redirect_url
+    response = session.get(f"{API_URL}v3/passkey/info", params=params, headers=handoff_headers, timeout=30)
+    data = response.json()
+    if data.get("result") != "OK":
+        return False
+    for cookie in data.get("cookie", {}).values():
+        name = cookie.get("name")
+        if not name:
+            continue
+        domain = cookie.get("domain")
+        path = cookie.get("path", "/")
+        if "value" in cookie:
+            kwargs = {"path": path}
+            if domain:
+                kwargs["domain"] = domain
+            session.cookies.set(name, cookie["value"], **kwargs)
+        else:
+            for existing in list(session.cookies):
+                if existing.name == name and (not domain or existing.domain == domain):
+                    session.cookies.clear(domain=existing.domain, path=existing.path, name=name)
+    next_url = data.get("data", {}).get("btn", {}).get("btn-next", {}).get("url")
+    if not next_url:
+        return False
+    callback_headers = dict(headers)
+    callback_headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    callback_headers["Referer"] = redirect_url
+    callback = session.get(next_url, headers=callback_headers, timeout=30, allow_redirects=True)
+    return callback.status_code < 400 and "parks2.bandainamco-am.co.jp" in urlparse(callback.url).netloc
+
 def change_name(email, password, new_last_name, new_first_name=None, new_last_kana=None, new_first_kana=None, new_nickname=None):
     """
-    Äá»•i tÃªn tÃ i khoáº£n NAMCO Parks
+    Đổi tên tài khoản NAMCO Parks
     
     Args:
-        email: Email Ä‘Äƒng nháº­p
-        password: Máº­t kháº©u
-        new_last_name: Há» má»›i (Kanji) - báº¯t buá»™c
-        new_first_name: TÃªn má»›i (Kanji) - tÃ¹y chá»n
-        new_last_kana: Há» má»›i (Katakana) - tÃ¹y chá»n
-        new_first_kana: TÃªn má»›i (Katakana) - tÃ¹y chá»n
-        new_nickname: Biá»‡t danh má»›i - tÃ¹y chá»n
+        email: Email đăng nhập
+        password: Mật khẩu
+        new_last_name: Họ mới (Kanji) - bắt buộc
+        new_first_name: Tên mới (Kanji) - tùy chọn
+        new_last_kana: Họ mới (Katakana) - tùy chọn
+        new_first_kana: Tên mới (Katakana) - tùy chọn
+        new_nickname: Biệt danh mới - tùy chọn
     
     Returns:
         dict: {success: bool, message: str}
@@ -43,11 +83,11 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
     }
 
     print("=" * 60)
-    print("Äá»”I TÃŠN TÃ€I KHOáº¢N NAMCO PARKS")
+    print("ĐỔI TÊN TÀI KHOẢN NAMCO PARKS")
     print("=" * 60)
 
-    # BÆ°á»›c 1: ÄÄƒng nháº­p
-    print("\n[1/4] ÄÄƒng nháº­p...")
+    # Bước 1: Đăng nhập
+    print("\n[1/4] Đăng nhập...")
     
     try:
         login_params = {
@@ -89,31 +129,35 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
         response_data = response.json()
         
         if response_data.get("result") != "OK":
-            return {"success": False, "message": f"ÄÄƒng nháº­p tháº¥t báº¡i: {response_data.get('msg', 'Unknown error')}"}
+            return {"success": False, "message": f"Đăng nhập thất bại: {response_data.get('msg', 'Unknown error')}"}
         
-        print("    âœ“ ÄÄƒng nháº­p thÃ nh cÃ´ng")
+        print("    ✓ Đăng nhập thành công")
         
-        # Láº¥y cookies tá»« response
+        # Lấy cookies từ response
         if "cookie" in response_data:
             for key, cookie_data in response_data["cookie"].items():
-                if "value" in cookie_data:
-                    session.cookies.set(cookie_data["name"], cookie_data["value"])
+                if "value" in cookie_data and cookie_data.get("name"):
+                    kwargs = {k: cookie_data[k] for k in ("path", "domain") if cookie_data.get(k)}
+                    session.cookies.set(cookie_data["name"], cookie_data["value"], **kwargs)
+
+        if not complete_parks2_handoff(session, headers, response_data.get("redirect", ""), language):
+            return {"success": False, "message": "Could not complete the Parks2 login handoff"}
         
     except Exception as e:
-        return {"success": False, "message": f"Lá»—i Ä‘Äƒng nháº­p: {str(e)}"}
+        return {"success": False, "message": f"Lỗi đăng nhập: {str(e)}"}
 
-    # BÆ°á»›c 2: Láº¥y trang Ä‘á»•i thÃ´ng tin
-    print("\n[2/4] Láº¥y trang Ä‘á»•i thÃ´ng tin...")
+    # Bước 2: Lấy trang đổi thông tin
+    print("\n[2/4] Lấy trang đổi thông tin...")
     
     try:
         response = session.get(MEMBER_REGIST_URL, headers=headers, timeout=30)
         
         if response.status_code != 200:
-            return {"success": False, "message": f"KhÃ´ng thá»ƒ truy cáº­p trang Ä‘á»•i thÃ´ng tin (Status: {response.status_code})"}
+            return {"success": False, "message": f"Không thể truy cập trang đổi thông tin (Status: {response.status_code})"}
         
         html = response.text
         
-        # Láº¥y cÃ¡c giÃ¡ trá»‹ hiá»‡n táº¡i
+        # Lấy các giá trị hiện tại
         current_last_name = re.search(r'name="L_NAME"[^>]*value="([^"]*)"', html)
         current_first_name = re.search(r'name="F_NAME"[^>]*value="([^"]*)"', html)
         current_last_kana = re.search(r'name="L_KANA"[^>]*value="([^"]*)"', html)
@@ -126,32 +170,32 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
         current_first_kana = current_first_kana.group(1) if current_first_kana else ""
         current_nickname = current_nickname.group(1) if current_nickname else ""
         
-        print(f"    Há» hiá»‡n táº¡i: {current_last_name}")
-        print(f"    TÃªn hiá»‡n táº¡i: {current_first_name}")
-        print(f"    Há» (Katakana): {current_last_kana}")
-        print(f"    TÃªn (Katakana): {current_first_kana}")
+        print(f"    Họ hiện tại: {current_last_name}")
+        print(f"    Tên hiện tại: {current_first_name}")
+        print(f"    Họ (Katakana): {current_last_kana}")
+        print(f"    Tên (Katakana): {current_first_kana}")
         print(f"    Nickname: {current_nickname}")
         
     except Exception as e:
-        return {"success": False, "message": f"Lá»—i láº¥y trang: {str(e)}"}
+        return {"success": False, "message": f"Lỗi lấy trang: {str(e)}"}
 
-    # BÆ°á»›c 3: Chuáº©n bá»‹ dá»¯ liá»‡u Ä‘á»•i tÃªn
-    print("\n[3/4] Chuáº©n bá»‹ dá»¯ liá»‡u Ä‘á»•i tÃªn...")
+    # Bước 3: Chuẩn bị dữ liệu đổi tên
+    print("\n[3/4] Chuẩn bị dữ liệu đổi tên...")
     
-    # Sá»­ dá»¥ng giÃ¡ trá»‹ má»›i hoáº·c giá»¯ giÃ¡ trá»‹ cÅ©
+    # Sử dụng giá trị mới hoặc giữ giá trị cũ
     final_last_name = new_last_name if new_last_name else current_last_name
     final_first_name = new_first_name if new_first_name else current_first_name
     final_last_kana = new_last_kana if new_last_kana else current_last_kana
     final_first_kana = new_first_kana if new_first_kana else current_first_kana
     final_nickname = new_nickname if new_nickname else current_nickname
     
-    print(f"    Há» má»›i: {final_last_name}")
-    print(f"    TÃªn má»›i: {final_first_name}")
-    print(f"    Há» (Katakana) má»›i: {final_last_kana}")
-    print(f"    TÃªn (Katakana) má»›i: {final_first_kana}")
-    print(f"    Nickname má»›i: {final_nickname}")
+    print(f"    Họ mới: {final_last_name}")
+    print(f"    Tên mới: {final_first_name}")
+    print(f"    Họ (Katakana) mới: {final_last_kana}")
+    print(f"    Tên (Katakana) mới: {final_first_kana}")
+    print(f"    Nickname mới: {final_nickname}")
     
-    # TÃ¬m form action
+    # Tìm form action
     form_action = re.search(r'<form[^>]*action="([^"]*)"', html)
     if form_action:
         form_action = form_action.group(1)
@@ -160,10 +204,10 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
         form_action = MEMBER_REGIST_URL
         print(f"    Form action (default): {form_action}")
     
-    # TÃ¬m táº¥t cáº£ hidden inputs
+    # Tìm tất cả hidden inputs
     hidden_inputs = re.findall(r'<input[^>]*type="hidden"[^>]*name="([^"]*)"[^>]*value="([^"]*)"', html)
     
-    # Chuáº©n bá»‹ form data
+    # Chuẩn bị form data
     form_data = {
         "L_NAME": final_last_name,
         "F_NAME": final_first_name,
@@ -172,29 +216,29 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
         "NICKNAME": final_nickname,
     }
     
-    # ThÃªm cÃ¡c hidden inputs
+    # Thêm các hidden inputs
     for name, value in hidden_inputs:
         if name not in form_data:
             form_data[name] = value
     
-    # ThÃªm cÃ¡c trÆ°á»ng trim
+    # Thêm các trường trim
     form_data["jp.co.interfactory.framework.trim.L_NAME"] = ""
     form_data["jp.co.interfactory.framework.trim.F_NAME"] = ""
     form_data["jp.co.interfactory.framework.trim.L_KANA"] = ""
     form_data["jp.co.interfactory.framework.trim.F_KANA"] = ""
     form_data["jp.co.interfactory.framework.trim.NICKNAME"] = ""
     
-    # TÃ¬m nÃºt submit
+    # Tìm nút submit
     submit_match = re.search(r'<input[^>]*type="submit"[^>]*name="([^"]*)"[^>]*value="([^"]*)"', html)
     if submit_match:
         form_data[submit_match.group(1)] = submit_match.group(2)
         print(f"    Submit button: {submit_match.group(1)}={submit_match.group(2)}")
     
-    # BÆ°á»›c 4: Gá»­i request Ä‘á»•i tÃªn
-    print("\n[4/4] Gá»­i request Ä‘á»•i tÃªn...")
+    # Bước 4: Gửi request đổi tên
+    print("\n[4/4] Gửi request đổi tên...")
     
     try:
-        # Cáº­p nháº­t headers cho form submit
+        # Cập nhật headers cho form submit
         form_headers = headers.copy()
         form_headers["Content-Type"] = "application/x-www-form-urlencoded"
         form_headers["Referer"] = MEMBER_REGIST_URL
@@ -208,39 +252,39 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
         
         print(f"    Status: {response.status_code}")
         
-        # Kiá»ƒm tra káº¿t quáº£
+        # Kiểm tra kết quả
         if response.status_code == 200:
-            # Kiá»ƒm tra xem cÃ³ thÃ´ng bÃ¡o lá»—i khÃ´ng
-            if "error" in response.text.lower() or "ã‚¨ãƒ©ãƒ¼" in response.text:
-                # TÃ¬m thÃ´ng bÃ¡o lá»—i
+            # Kiểm tra xem có thông báo lỗi không
+            if "error" in response.text.lower() or "エラー" in response.text:
+                # Tìm thông báo lỗi
                 error_match = re.search(r'class="[^"]*error[^"]*"[^>]*>([^<]*)<', response.text)
                 if error_match:
-                    return {"success": False, "message": f"Lá»—i: {error_match.group(1)}"}
+                    return {"success": False, "message": f"Lỗi: {error_match.group(1)}"}
             
-            # Kiá»ƒm tra xem cÃ³ thÃ´ng bÃ¡o thÃ nh cÃ´ng khÃ´ng
-            if "success" in response.text.lower() or "å®Œäº†" in response.text or "å¤‰æ›´" in response.text:
-                return {"success": True, "message": "Äá»•i tÃªn thÃ nh cÃ´ng!"}
+            # Kiểm tra xem có thông báo thành công không
+            if "success" in response.text.lower() or "完了" in response.text or "変更" in response.text:
+                return {"success": True, "message": "Đổi tên thành công!"}
             
-            # Náº¿u khÃ´ng rÃµ rÃ ng, giáº£ sá»­ thÃ nh cÃ´ng náº¿u status 200
-            return {"success": True, "message": "Äá»•i tÃªn thÃ nh cÃ´ng! (cáº§n kiá»ƒm tra láº¡i)"}
+            # Nếu không rõ ràng, giả sử thành công nếu status 200
+            return {"success": True, "message": "Đổi tên thành công! (cần kiểm tra lại)"}
         else:
             return {"success": False, "message": f"HTTP Error: {response.status_code}"}
         
     except Exception as e:
-        return {"success": False, "message": f"Lá»—i gá»­i request: {str(e)}"}
+        return {"success": False, "message": f"Lỗi gửi request: {str(e)}"}
 
 
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description="Äá»•i tÃªn tÃ i khoáº£n NAMCO Parks")
-    parser.add_argument("--email", required=True, help="Email Ä‘Äƒng nháº­p")
-    parser.add_argument("--password", required=True, help="Máº­t kháº©u")
-    parser.add_argument("--last-name", required=True, help="Há» má»›i (Kanji)")
-    parser.add_argument("--first-name", help="TÃªn má»›i (Kanji)")
-    parser.add_argument("--last-kana", help="Há» má»›i (Katakana)")
-    parser.add_argument("--first-kana", help="TÃªn má»›i (Katakana)")
-    parser.add_argument("--nickname", help="Biá»‡t danh má»›i")
+    parser = argparse.ArgumentParser(description="Đổi tên tài khoản NAMCO Parks")
+    parser.add_argument("--email", required=True, help="Email đăng nhập")
+    parser.add_argument("--password", required=True, help="Mật khẩu")
+    parser.add_argument("--last-name", required=True, help="Họ mới (Kanji)")
+    parser.add_argument("--first-name", help="Tên mới (Kanji)")
+    parser.add_argument("--last-kana", help="Họ mới (Katakana)")
+    parser.add_argument("--first-kana", help="Tên mới (Katakana)")
+    parser.add_argument("--nickname", help="Biệt danh mới")
     
     args = parser.parse_args()
     
@@ -256,13 +300,12 @@ def main():
     
     print("\n" + "=" * 60)
     if result["success"]:
-        print("âœ“ THÃ€NH CÃ”NG!")
+        print("✓ THÀNH CÔNG!")
     else:
-        print("âœ— THáº¤T Báº I!")
+        print("✗ THẤT BẠI!")
     print("=" * 60)
     print(result["message"])
 
 
 if __name__ == "__main__":
     main()
-
