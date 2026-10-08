@@ -23,6 +23,10 @@ from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QPoint, QSettings
 from PySide6.QtGui import QAction, QIcon, QFont, QColor, QPalette, QLinearGradient, QBrush, QPainter, QPixmap
 
 from icon_helper import load_svg_icon, AppIcons
+from proxy_manager import (
+    MODE_PER_REQUEST, MODE_PER_SESSION, PROXY_FILE, TEST_TIMEOUT,
+    check_all_proxies, new_session, proxy_manager,
+)
 
 # ============================================================
 # CẤU HÌNH
@@ -32,6 +36,7 @@ LOGIN_URL = "https://account.bandainamcoid.com/login.html"
 CLIENT_ID = "namcoparks_onlinestore"
 REDIRECT_URI = "https://parks2.bandainamco-am.co.jp/member_regist_new.html?backto=top"
 DATA_FILE = "accounts_data.json"
+PROXY_FORMAT_HINT = "ip:port:username:pass"
 
 
 def fetch_edit_profile(session, headers):
@@ -251,7 +256,7 @@ class LoginWorker(QThread):
     def run(self):
         try:
             self.progress.emit(10)
-            session = requests.Session()
+            session = new_session()
             
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -385,6 +390,35 @@ class BatchCheckWorker(QThread):
                 self.result_ready.emit(account_email, success, message)
             time.sleep(0.5)
         self.finished_checking.emit()
+
+    def stop(self):
+        self._is_running = False
+        self.wait()
+
+# ============================================================
+# WORKER THREAD KIỂM TRA PROXY
+# ============================================================
+class ProxyCheckWorker(QThread):
+    """Thread kiểm tra song song danh sách proxy để không block UI"""
+    row_ready = Signal(int, bool, str)  # index, ok, message
+    finished_check = Signal()
+
+    def __init__(self, proxies):
+        super().__init__()
+        self.proxies = list(proxies)
+        self._is_running = True
+
+    def run(self):
+        try:
+            check_all_proxies(
+                self.proxies,
+                emit=lambda index, ok, message: self.row_ready.emit(index, ok, message),
+                is_running=lambda: self._is_running,
+                timeout=TEST_TIMEOUT,
+            )
+        except Exception as exc:
+            self.row_ready.emit(0, False, f"Lỗi: {str(exc)}")
+        self.finished_check.emit()
 
     def stop(self):
         self._is_running = False
@@ -736,10 +770,16 @@ class AccountManager(QMainWindow):
         self.campaign_tab = self.create_campaign_tab()
         self.tab_widget.addTab(self.campaign_tab, load_svg_icon(AppIcons.CHECK, 16), "Chi\u1ebfn d\u1ecbch")
 
+        self.settings_tab = self.create_settings_tab()
+        self.tab_widget.addTab(self.settings_tab, load_svg_icon(AppIcons.SETTINGS, 16), "C\u1ea5u h\u00ecnh")
+
         # Status Bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Sẵn sàng")
+
+        # Proxy settings (sau khi status bar sẵn sàng để báo trạng thái)
+        self.load_proxy_settings()
 
     def create_campaign_tab(self):
         tab = QWidget()
@@ -774,6 +814,226 @@ class AccountManager(QMainWindow):
             self.campaign_table.horizontalHeader().setSectionResizeMode(col, mode)
         layout.addWidget(self.campaign_table, 1)
         return tab
+
+    # ============================================================
+    # TAB CẤU HÌNH - PROXY
+    # ============================================================
+    def create_settings_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+        self.proxy_check_worker = None
+
+        heading = QLabel("C\u1ea5u h\u00ecnh")
+        heading.setStyleSheet("font-size: 14pt; font-weight: 700;")
+        layout.addWidget(heading)
+
+        proxy_group = QGroupBox("Proxy cho request")
+        proxy_layout = QVBoxLayout(proxy_group)
+
+        explanation = QLabel(
+            "M\u1ed7i request (\u0111\u0103ng nh\u1eadp, ki\u1ec3m tra t\u00e0i kho\u1ea3n, \u0111\u1ed5i t\u00ean) s\u1ebd d\u00f9ng proxy l\u1ea5y t\u1eeb file "
+            "proxy.txt theo \u0111\u1ecbnh d\u1ea1ng ip:port:username:pass. Khi t\u1ebft proxy, request \u0111i th\u1eb3ng nh\u01b0 tr\u01b0\u1edbc."
+        )
+        explanation.setWordWrap(True)
+        proxy_layout.addWidget(explanation)
+
+        self.proxy_enabled = QCheckBox("B\u1ebft proxy cho t\u1ea5t c\u1ea3 request")
+        self.proxy_enabled.setToolTip("T\u1eaft l\u1ebfn b\u1ecdc t\u1ea5t c\u1ea3 request \u0111i qua proxy trong file")
+        self.proxy_enabled.toggled.connect(self.on_proxy_settings_changed)
+        proxy_layout.addWidget(self.proxy_enabled)
+
+        form = QFormLayout()
+        file_row = QHBoxLayout()
+        self.proxy_file_input = QLineEdit()
+        self.proxy_file_input.setPlaceholderText(PROXY_FILE)
+        self.proxy_file_input.setToolTip("\u0110\u01b0\u1eddng d\u1eabn \u0111\u1ebfn file danh s\u00e1ch proxy")
+        browse_button = QPushButton("Ch\u1ecdn file...")
+        browse_button.clicked.connect(self.browse_proxy_file)
+        reload_button = QPushButton("T\u1ea3i l\u1ea1i")
+        reload_button.clicked.connect(self.reload_proxy_file)
+        file_row.addWidget(self.proxy_file_input, 1)
+        file_row.addWidget(browse_button)
+        file_row.addWidget(reload_button)
+        form.addRow("File proxy:", file_row)
+
+        format_hint = QLabel("%s  (mỗi dòng một proxy, dòng bắt đầu bằng #)" % PROXY_FORMAT_HINT)
+        format_hint.setWordWrap(True)
+        form.addRow("\u0110\u1ecbnh d\u1ea1ng:", format_hint)
+
+        self.proxy_mode_combo = QComboBox()
+        self.proxy_mode_combo.addItem("Luân phiên theo từng request", MODE_PER_REQUEST)
+        self.proxy_mode_combo.addItem("Mỗi phiên dùng 1 proxy (mỗi tài khoản 1 proxy)", MODE_PER_SESSION)
+        self.proxy_mode_combo.setToolTip("Chọn cách phân bổ proxy cho các request")
+        self.proxy_mode_combo.currentIndexChanged.connect(self.on_proxy_settings_changed)
+        form.addRow("Chế độ:", self.proxy_mode_combo)
+        proxy_layout.addLayout(form)
+
+        actions = QHBoxLayout()
+        check_button = QPushButton("Kiểm tra proxy")
+        check_button.setIcon(load_svg_icon(AppIcons.CHECK, 16))
+        check_button.clicked.connect(self.check_proxies)
+        open_button = QPushButton("Mở file proxy")
+        open_button.setIcon(load_svg_icon(AppIcons.FOLDER_OPEN, 16))
+        open_button.clicked.connect(self.open_proxy_file)
+        actions.addWidget(check_button)
+        actions.addWidget(open_button)
+        actions.addStretch(1)
+        proxy_layout.addLayout(actions)
+
+        self.proxy_status_label = QLabel("")
+        proxy_layout.addWidget(self.proxy_status_label)
+
+        self.proxy_table = QTableWidget(0, 6)
+        self.proxy_table.setHorizontalHeaderLabels(["#", "Host", "Port", "Username", "Password", "Trạng thái"])
+        self.proxy_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.proxy_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.proxy_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.proxy_table.setAlternatingRowColors(True)
+        self.proxy_table.verticalHeader().setVisible(False)
+        for col, mode in enumerate((QHeaderView.ResizeMode.ResizeToContents, QHeaderView.ResizeMode.Stretch,
+                                    QHeaderView.ResizeMode.ResizeToContents, QHeaderView.ResizeMode.ResizeToContents,
+                                    QHeaderView.ResizeMode.ResizeToContents, QHeaderView.ResizeMode.Stretch)):
+            self.proxy_table.horizontalHeader().setSectionResizeMode(col, mode)
+        proxy_layout.addWidget(self.proxy_table, 1)
+
+        layout.addWidget(proxy_group, 1)
+        return tab
+
+    def load_proxy_settings(self):
+        """Nạp cấu hình proxy đã lưu và đọc file proxy.txt."""
+        path = self.ui_settings.value("proxy_file", PROXY_FILE)
+        if not isinstance(path, str) or not path.strip():
+            path = PROXY_FILE
+        mode = self.ui_settings.value("proxy_mode", MODE_PER_REQUEST)
+        if mode not in (MODE_PER_REQUEST, MODE_PER_SESSION):
+            mode = MODE_PER_REQUEST
+        enabled = self.ui_settings.value("proxy_enabled", False, type=bool)
+
+        widgets = (self.proxy_file_input, self.proxy_mode_combo, self.proxy_enabled)
+        for widget in widgets:
+            widget.blockSignals(True)
+        self.proxy_file_input.setText(path)
+        index = self.proxy_mode_combo.findData(mode)
+        self.proxy_mode_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.proxy_enabled.setChecked(enabled)
+        for widget in widgets:
+            widget.blockSignals(False)
+
+        self.apply_proxy_settings(reload_file=True)
+
+    def on_proxy_settings_changed(self, *args):
+        self.apply_proxy_settings()
+
+    def apply_proxy_settings(self, reload_file=False):
+        path = self.proxy_file_input.text().strip() or PROXY_FILE
+        proxy_manager.path = path
+        proxy_manager.mode = self.proxy_mode_combo.currentData() or MODE_PER_REQUEST
+        proxy_manager.enabled = self.proxy_enabled.isChecked()
+        if reload_file:
+            proxy_manager.load()
+        self.ui_settings.setValue("proxy_file", path)
+        self.ui_settings.setValue("proxy_mode", proxy_manager.mode)
+        self.ui_settings.setValue("proxy_enabled", proxy_manager.enabled)
+        self.ui_settings.sync()
+        if reload_file or self.proxy_table.rowCount() != len(proxy_manager.proxies):
+            self.refresh_proxy_table()
+        self.update_proxy_status()
+
+    def update_proxy_status(self):
+        status = proxy_manager.status_text()
+        detail = "%s  ·  %s" % (status, proxy_manager.path)
+        if proxy_manager.errors:
+            detail += "  ·  bỏ qua %d dòng lỗi" % len(proxy_manager.errors)
+        self.proxy_status_label.setText(detail)
+        if proxy_manager.enabled and proxy_manager.proxies:
+            scope = "mỗi request" if proxy_manager.mode == MODE_PER_REQUEST else "mỗi phiên"
+            self.status_bar.showMessage("Proxy: %d (%s)" % (len(proxy_manager.proxies), scope), 4000)
+
+    def refresh_proxy_table(self):
+        proxies = proxy_manager.proxies
+        self.proxy_table.setRowCount(len(proxies))
+        for row, proxy in enumerate(proxies):
+            password = proxy.get("password", "")
+            values = [str(row + 1), proxy.get("host", ""), str(proxy.get("port", "")),
+                      proxy.get("username", ""), ("\u2022" * 8) if password else "", "Chưa kiểm tra"]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if col in (0, 2):
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if col == 4 and password:
+                    item.setToolTip(password)
+                self.proxy_table.setItem(row, col, item)
+
+    def browse_proxy_file(self):
+        start_dir = self.proxy_file_input.text().strip() or PROXY_FILE
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Chọn file proxy", os.path.dirname(start_dir),
+            "Text files (*.txt);;All files (*)",
+        )
+        if path:
+            self.proxy_file_input.setText(path)
+            self.apply_proxy_settings(reload_file=True)
+
+    def reload_proxy_file(self):
+        self.apply_proxy_settings(reload_file=True)
+        if not os.path.exists(proxy_manager.path):
+            QMessageBox.information(self, "Proxy", "Không tìm thấy file:\n%s" % proxy_manager.path)
+            return
+        if proxy_manager.errors:
+            preview = "\n".join("Dòng %d: %s" % (number, reason)
+                                for number, _, reason in proxy_manager.errors[:5])
+            QMessageBox.warning(self, "Proxy",
+                                "%d dòng sai định dạng:\n%s" % (len(proxy_manager.errors), preview))
+        self.log("Đã tải %d proxy từ %s" % (len(proxy_manager.proxies),
+                                            os.path.basename(proxy_manager.path)))
+
+    def open_proxy_file(self):
+        path = self.proxy_file_input.text().strip() or PROXY_FILE
+        if not os.path.exists(path):
+            try:
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write("# Mỗi dòng 1 proxy theo định dạng: %s\n" % PROXY_FORMAT_HINT)
+                    handle.write("# Ví dụ: 123.45.67.89:8080:myuser:mypassword\n")
+            except OSError as exc:
+                QMessageBox.warning(self, "Proxy", "Không tạo được file:\n%s" % exc)
+                return
+            self.apply_proxy_settings(reload_file=True)
+        webbrowser.open(os.path.abspath(path))
+
+    def check_proxies(self):
+        if self.proxy_check_worker is not None and self.proxy_check_worker.isRunning():
+            QMessageBox.information(self, "Kiểm tra proxy", "Đang kiểm tra proxy, vui lòng đợi.")
+            return
+        if not proxy_manager.proxies:
+            QMessageBox.information(self, "Kiểm tra proxy",
+                                    "Chưa có proxy để kiểm tra. Hãy tải file proxy.txt trước.")
+            return
+        for row in range(self.proxy_table.rowCount()):
+            self.proxy_table.setItem(row, 5, QTableWidgetItem("Đang kiểm tra..."))
+        self.proxy_check_worker = ProxyCheckWorker(proxy_manager.proxies)
+        self.proxy_check_worker.row_ready.connect(self.on_proxy_check_result)
+        self.proxy_check_worker.finished_check.connect(self.on_proxy_check_finished)
+        self.proxy_check_worker.start()
+        self.proxy_status_label.setText("Đang kiểm tra %d proxy..." % len(proxy_manager.proxies))
+        self.log("Bắt đầu kiểm tra %d proxy..." % len(proxy_manager.proxies))
+
+    def on_proxy_check_result(self, row, ok, message):
+        if row < 0 or row >= self.proxy_table.rowCount():
+            return
+        item = QTableWidgetItem(("\u2713 " if ok else "\u2717 ") + message)
+        item.setForeground(QColor("#168578") if ok else QColor("#dc3545"))
+        item.setToolTip(message)
+        self.proxy_table.setItem(row, 5, item)
+
+    def on_proxy_check_finished(self):
+        total = self.proxy_table.rowCount()
+        working = sum(1 for row in range(total)
+                      if (self.proxy_table.item(row, 5) or QTableWidgetItem("")).text().startswith("\u2713"))
+        self.proxy_status_label.setText("Kiểm tra xong: %d/%d proxy hoạt động" % (working, total))
+        self.log("Kiểm tra proxy: %d/%d hoạt động" % (working, total))
+        self.status_bar.showMessage("Kiểm tra proxy: %d hoạt động" % working, 5000)
 
     def refresh_campaign_table(self):
         self.campaign_table.setRowCount(len(self.campaigns))
@@ -1759,7 +2019,9 @@ class AccountManager(QMainWindow):
         # Dừng tất cả workers
         for worker in self.workers:
             worker.stop()
-        
+        if self.proxy_check_worker is not None and self.proxy_check_worker.isRunning():
+            self.proxy_check_worker.stop()
+
         self.save_data()
         event.accept()
 

@@ -1,5 +1,6 @@
 accounts_data.json
 namco_session.json
+proxy.txt
 __pycache__/
 *.py[cod]
 .venv/

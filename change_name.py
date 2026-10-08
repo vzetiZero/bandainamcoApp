@@ -5,6 +5,12 @@ import io
 import re
 from urllib.parse import urlparse, parse_qs
 
+try:
+    from proxy_manager import new_session
+except ImportError:  # Chạy standalone khi thiếu proxy_manager thì dùng request trực tiếp
+    def new_session():
+        return requests.Session()
+
 # Fix encoding cho Windows console
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
@@ -77,7 +83,7 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
         dict: {success: bool, message: str}
     """
     
-    session = requests.Session()
+    session = new_session()
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

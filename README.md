@@ -9,6 +9,7 @@ Windows desktop app for organizing BANDAI NAMCO ID / NAMCO Parks accounts.
 - Show profile fields, points, and membership flags in the account table after the Parks2 login handoff completes.
 - Keep account input and account list in separate tabs; the activity log appears beside the account table.
 - Edit only `first_name_kanji` through the profile dialog.
+- Send every request (login, check, name change) through proxies read from `proxy.txt`, configured in the Settings tab.
 
 ## Setup
 
@@ -24,6 +25,23 @@ You can also run `install.bat` and `start.bat`.
 ## Authentication flow
 
 The app calls BANDAI NAMCO ID `v3/login/idpw`, then `v3/passkey/info`. When that response includes the `btn-next` continuation URL (the site's "later" option), the app follows it to finish the Parks2 callback without creating a passkey. It then reads `member_mypage.html`, with the member edit page used only to fill fields absent from the profile summary. No browser automation is needed for this flow.
+
+## Proxy
+
+The **Cấu hình** (Settings) tab reads proxies from `proxy.txt`, one per line:
+
+```
+ip:port:username:pass
+```
+
+`ip:port`, `user:pass@ip:port` and `http://ip:port:username:pass` are accepted too; lines starting with `#` are ignored. The tab lists the parsed proxies, lets you pick another file, reload it, and check each proxy against the login page (results appear in the table's status column).
+
+Choose how proxies are handed out:
+
+- **Luân phiên theo từng request** – every HTTP request rotates to the next proxy.
+- **Mỗi phiên dùng 1 proxy** – each session (each account check or name change) keeps one proxy.
+
+Uncheck the box to send requests directly, as before. The choice, file path, and mode are remembered between runs. `proxy.txt` holds credentials, so it is ignored by Git; the app creates it with a format template when you click *Mở file proxy*. SOCKS proxies additionally need `pip install requests[socks]`.
 
 ## Local account data
 
