@@ -21,9 +21,9 @@ python account_manager.py
 
 You can also run `install.bat` and `start.bat`.
 
-## Authentication notes
+## Authentication flow
 
-The app first calls the BANDAI NAMCO ID `v3/login/idpw` endpoint. The response may send the session through `v3/passkey/info` and request an approval in the browser before Parks2 grants access to `member_mypage.html`. The app reports this state and does not accept account approvals or create passkeys automatically. Profile fields are shown only when the authenticated Parks2 page is available.
+The app calls BANDAI NAMCO ID `v3/login/idpw`, then `v3/passkey/info`. When that response includes the `btn-next` continuation URL (the site's "later" option), the app follows it to finish the Parks2 callback without creating a passkey. It then reads `member_mypage.html`, with the member edit page used only to fill fields absent from the profile summary. No browser automation is needed for this flow.
 
 ## Local account data
 
