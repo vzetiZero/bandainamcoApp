@@ -70,12 +70,16 @@ def fetch_edit_profile(session, headers):
 def fetch_member_profile(session, headers):
     """Read the profile summary shown on the authenticated member mypage."""
     url = "https://parks2.bandainamco-am.co.jp/member_mypage.html"
+    profile_headers = dict(headers)
+    profile_headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    profile_headers["Origin"] = "https://parks2.bandainamco-am.co.jp"
+    profile_headers["Referer"] = "https://parks2.bandainamco-am.co.jp/"
     try:
-        response = session.get(url, headers=headers, timeout=30)
+        response = session.get(url, headers=profile_headers, timeout=30)
     except requests.RequestException:
-        return fetch_edit_profile(session, headers)
+        return fetch_edit_profile(session, profile_headers)
     if response.status_code != 200 or "member_mypage" not in response.url:
-        return fetch_edit_profile(session, headers)
+        return fetch_edit_profile(session, profile_headers)
 
     html = re.sub(r'<(script|style)\b[^>]*>.*?</\1>', ' ', response.text, flags=re.I | re.S)
     text = unescape(re.sub(r'<[^>]+>', ' ', html))
@@ -114,12 +118,14 @@ def fetch_member_profile(session, headers):
         if value:
             profile[key] = value
     if profile:
+        for key, value in fetch_edit_profile(session, profile_headers).items():
+            profile.setdefault(key, value)
         return profile
     return fetch_edit_profile(session, headers)
 
 
 def inspect_login_handoff(session, headers, redirect_url, language):
-    """Inspect the read-only passkey handoff and report when Parks2 needs approval."""
+    """Follow the offered 'later' button to finish the Parks2 login without creating a passkey."""
     query = parse_qs(urlparse(redirect_url or "").query)
     code = query.get("code", [""])[0]
     if not code:
@@ -136,6 +142,24 @@ def inspect_login_handoff(session, headers, redirect_url, language):
         return {"profile_fetch_status": "Could not complete the Parks2 login handoff"}
     if data.get("result") != "OK":
         return {"profile_fetch_status": "Could not complete the Parks2 login handoff"}
+    for cookie in data.get("cookie", {}).values():
+        name = cookie.get("name")
+        if not name:
+            continue
+        domain = cookie.get("domain")
+        path = cookie.get("path", "/")
+        if "value" in cookie:
+            kwargs = {"path": path}
+            if domain:
+                kwargs["domain"] = domain
+            session.cookies.set(name, cookie["value"], **kwargs)
+        else:
+            for existing in list(session.cookies):
+                if existing.name == name and (not domain or existing.domain == domain):
+                    try:
+                        session.cookies.clear(domain=existing.domain, path=existing.path, name=name)
+                    except requests.cookies.CookieConflictError:
+                        pass
     result = {}
     details = data.get("data", {})
     gadata = details.get("gadata", {}) if isinstance(details, dict) else {}
@@ -143,11 +167,20 @@ def inspect_login_handoff(session, headers, redirect_url, language):
         result["dob"] = gadata["birthday"]
     if gadata.get("gender") is not None:
         result["gender_code"] = str(gadata["gender"])
-    approval = details.get("view", {}).get("approval", {}) if isinstance(details, dict) else {}
-    if approval.get("flag"):
-        result["profile_fetch_status"] = "Bandai Namco approval is required to continue"
-    elif data.get("redirect") or data.get("redirect_no-cache"):
-        result["profile_fetch_status"] = "Login handoff continues in the browser"
+    next_url = details.get("btn", {}).get("btn-next", {}).get("url") if isinstance(details, dict) else None
+    if not next_url:
+        result["profile_fetch_status"] = "The account site did not provide a Parks2 continuation URL"
+        return result
+    page_headers = dict(headers)
+    page_headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    page_headers["Referer"] = redirect_url
+    try:
+        callback = session.get(next_url, headers=page_headers, timeout=30, allow_redirects=True)
+    except requests.RequestException:
+        result["profile_fetch_status"] = "Could not finish the Parks2 login callback"
+        return result
+    if callback.status_code >= 400 or "parks2.bandainamco-am.co.jp" not in urlparse(callback.url).netloc:
+        result["profile_fetch_status"] = "Could not finish the Parks2 login callback"
     return result
 
 # ============================================================
@@ -233,8 +266,10 @@ class LoginWorker(QThread):
                 profile = {"email": self.email, "password": self.password}
                 handoff = inspect_login_handoff(session, headers, response_data.get("redirect", ""), language)
                 profile.update(handoff)
-                if profile.get("profile_fetch_status") != "Bandai Namco approval is required to continue":
-                    profile.update(fetch_member_profile(session, headers))
+                if "profile_fetch_status" not in profile:
+                    member_profile = fetch_member_profile(session, headers)
+                    profile.update(member_profile)
+                    profile["profile_fetch_status"] = "Profile loaded from Parks2" if member_profile else "Parks2 login complete; no profile fields were parsed"
                 profile.setdefault("status", "Chua kiem tra")
                 profile.setdefault("last_check", None)
                 self.profile_ready.emit(self.email, profile)
