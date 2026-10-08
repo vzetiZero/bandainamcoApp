@@ -746,10 +746,8 @@ class AccountManager(QMainWindow):
         input_layout = self.input_tab.layout()
         input_layout.removeWidget(self.log_text)
         self.log_text.hide()
-        log_label = input_layout.itemAt(input_layout.count() - 3).widget()
-        if isinstance(log_label, QLabel):
-            input_layout.removeWidget(log_label)
-            log_label.deleteLater()
+        input_layout.removeWidget(self.log_label)
+        self.log_label.hide()
         self.tab_widget.addTab(self.input_tab, load_svg_icon(AppIcons.PLUS, 16), "Nhập tài khoản")
 
         self.list_tab = QWidget()
@@ -1210,83 +1208,50 @@ class AccountManager(QMainWindow):
         """)
         layout.addWidget(self.text_input)
         
-        # Buttons
+        # Buttons - gọn, gom trên một hàng
+        def compact_button(text, object_name, icon_name, tip):
+            button = QPushButton(text)
+            button.setObjectName(object_name)
+            button.setIcon(load_svg_icon(icon_name, 15))
+            button.setToolTip(tip)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            return button
+
         btn_layout = QHBoxLayout()
-        
-        add_btn = QPushButton(" Thêm vào danh sách")
-        add_btn.setIcon(load_svg_icon(AppIcons.PLUS, 18))
+        btn_layout.setSpacing(8)
+
+        add_btn = compact_button("Thêm", "actionAdd", AppIcons.PLUS,
+                                "Thêm các tài khoản trong ô nhập vào danh sách")
         add_btn.clicked.connect(self.add_from_text)
-        add_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #d61718;
-                color: white;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #b51515; }
-        """)
         btn_layout.addWidget(add_btn)
-        
-        clear_btn = QPushButton(" Xóa")
-        clear_btn.setIcon(load_svg_icon(AppIcons.X, 18))
+
+        clear_btn = compact_button("Xóa", "actionClear", AppIcons.X,
+                                  "Xóa toàn bộ nội dung ô nhập")
         clear_btn.clicked.connect(self.text_input.clear)
-        clear_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #6c757d;
-                color: white;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #5a6268; }
-        """)
         btn_layout.addWidget(clear_btn)
-        
-        layout.addLayout(btn_layout)
-        
-        # Quick Actions
-        actions_group = QGroupBox("Thao tác nhanh")
-        actions_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid #dee2e6;
-                border-radius: 4px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
-        actions_layout = QVBoxLayout(actions_group)
-        
-        # Check single account
-        check_single_btn = QPushButton(" Kiểm tra tài khoản đầu tiên")
-        check_single_btn.setIcon(load_svg_icon(AppIcons.CHECK, 18))
+
+        check_single_btn = compact_button("Kiểm tra đầu tiên", "actionCheck", AppIcons.CHECK,
+                                         "Kiểm tra tài khoản đầu tiên trong danh sách")
         check_single_btn.clicked.connect(self.check_first_account)
-        actions_layout.addWidget(check_single_btn)
-        
-        # Export
-        export_btn = QPushButton(" Export danh sách")
-        export_btn.setIcon(load_svg_icon(AppIcons.DOWNLOAD, 18))
+        btn_layout.addWidget(check_single_btn)
+
+        export_btn = compact_button("Export", "actionExport", AppIcons.DOWNLOAD,
+                                   "Export danh sách tài khoản ra file")
         export_btn.clicked.connect(self.export_accounts)
-        actions_layout.addWidget(export_btn)
-        
-        layout.addWidget(actions_group)
+        btn_layout.addWidget(export_btn)
+
+        btn_layout.addStretch(1)
+        layout.addLayout(btn_layout)
         
         # Progress
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
         
-        # Log
-        log_label = QLabel("Nhật ký:")
-        log_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
-        layout.addWidget(log_label)
+        # Log (nhãn + nội dung được chuyển sang tab danh sách tài khoản)
+        self.log_label = QLabel("Nhật ký:")
+        self.log_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        layout.addWidget(self.log_label)
         
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
@@ -1437,6 +1402,15 @@ class AccountManager(QMainWindow):
             QPushButton {{ background: #b8fff5; color: #102322; border: 1px solid #3ff2d7; padding: 8px 13px; border-radius: 6px; font-weight: 600; }}
             QPushButton:hover {{ background: #93f7e9; border-color: #20ccb7; color: #102322; }}
             QPushButton:pressed {{ background: #72ead8; }}
+            QPushButton#actionAdd, QPushButton#actionClear, QPushButton#actionCheck, QPushButton#actionExport {{ padding: 6px 12px; border-radius: 6px; font-weight: 700; border: none; color: white; }}
+            QPushButton#actionAdd {{ background: #d61718; }}
+            QPushButton#actionAdd:hover {{ background: #b51515; }}
+            QPushButton#actionClear {{ background: #6c757d; }}
+            QPushButton#actionClear:hover {{ background: #5a6268; }}
+            QPushButton#actionCheck {{ background: #28a745; }}
+            QPushButton#actionCheck:hover {{ background: #218838; }}
+            QPushButton#actionExport {{ background: #2864c5; }}
+            QPushButton#actionExport:hover {{ background: #1f4fa8; }}
             QLineEdit, QTextEdit, QComboBox {{ background: {surface}; color: {text}; border: 1px solid {border}; border-radius: 6px; padding: 7px; selection-background-color: {accent}; }}
             QTextEdit#activityLog {{ font-size: 8pt; }}
             QLineEdit:focus, QTextEdit:focus, QComboBox:focus {{ border: 2px solid {accent}; }}
