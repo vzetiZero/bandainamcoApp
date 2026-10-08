@@ -3,6 +3,7 @@ import json
 import sys
 import io
 import re
+from html.parser import HTMLParser
 from html import unescape
 from urllib.parse import urlparse, parse_qs
 
@@ -62,13 +63,39 @@ def complete_parks2_handoff(session, headers, redirect_url, language):
     return callback.status_code < 400 and "parks2.bandainamco-am.co.jp" in urlparse(callback.url).netloc
 
 def extract_form_date_values(html):
-    values = {}
-    for attrs in re.findall(r"<input\b([^>]*)>", html, re.I | re.S):
-        name = re.search(r'\bname="([^"]+)"', attrs, re.I)
-        value = re.search(r'\bvalue="([^"]*)"', attrs, re.I)
-        if name and name.group(1).lower() in {"year", "month", "day"} and value:
-            values[name.group(1).lower()] = unescape(value.group(1)).strip()
-    return values
+    class DateFieldParser(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.values = {}
+            self.active_select = None
+            self.selected_option = None
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            name = (attrs.get("name") or "").lower()
+            if tag.lower() == "input" and name in {"year", "month", "day"} and "value" in attrs:
+                self.values[name] = (attrs.get("value") or "").strip()
+            elif tag.lower() == "select" and name in {"year", "month", "day"}:
+                self.active_select = name
+                self.selected_option = None
+            elif tag.lower() == "option" and self.active_select:
+                option_value = attrs.get("value")
+                if option_value is not None:
+                    if self.active_select not in self.values:
+                        self.values[self.active_select] = option_value.strip()
+                    if "selected" in attrs:
+                        self.selected_option = option_value.strip()
+
+        def handle_endtag(self, tag):
+            if tag.lower() == "select" and self.active_select:
+                if self.selected_option is not None:
+                    self.values[self.active_select] = self.selected_option
+                self.active_select = None
+                self.selected_option = None
+
+    parser = DateFieldParser()
+    parser.feed(html)
+    return parser.values
 
 
 def change_name(email, password, new_last_name, new_first_name=None, new_last_kana=None, new_first_kana=None, new_nickname=None, new_dob=None):
@@ -297,11 +324,19 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
                 if verify_response.status_code != 200 or "member_regist.html" not in verify_response.url:
                     return {"success": False, "message": "Could not reload the edit form to verify the date of birth."}
                 saved_fields = extract_form_date_values(verify_response.text)
+                missing_fields = [field for field in ("year", "month", "day") if field not in saved_fields]
+                if missing_fields:
+                    return {
+                        "success": False,
+                        "message": "Could not verify the saved date: the reloaded edit page did not contain date controls ("
+                        + ", ".join(missing_fields)
+                        + "). Please reopen the account and check its profile before retrying.",
+                    }
                 try:
                     expected_date = tuple(int(part) for part in dob_parts.groups())
                     saved_date = tuple(int(saved_fields[field]) for field in ("year", "month", "day"))
                 except (KeyError, ValueError):
-                    return {"success": False, "message": "The server did not return all date fields needed for verification."}
+                    return {"success": False, "message": "Could not verify the saved date because the server returned an invalid date value."}
                 if saved_date != expected_date:
                     return {"success": False, "message": "The server did not save the new date of birth; local data was left unchanged."}
                 return {"success": True, "message": "The server saved and verified the new date of birth."}
