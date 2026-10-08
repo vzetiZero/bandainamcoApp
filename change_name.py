@@ -3,6 +3,7 @@ import json
 import sys
 import io
 import re
+from html import unescape
 from urllib.parse import urlparse, parse_qs
 
 # Fix encoding cho Windows console
@@ -59,6 +60,16 @@ def complete_parks2_handoff(session, headers, redirect_url, language):
     callback_headers["Referer"] = redirect_url
     callback = session.get(next_url, headers=callback_headers, timeout=30, allow_redirects=True)
     return callback.status_code < 400 and "parks2.bandainamco-am.co.jp" in urlparse(callback.url).netloc
+
+def extract_form_date_values(html):
+    values = {}
+    for attrs in re.findall(r"<input\b([^>]*)>", html, re.I | re.S):
+        name = re.search(r'\bname="([^"]+)"', attrs, re.I)
+        value = re.search(r'\bvalue="([^"]*)"', attrs, re.I)
+        if name and name.group(1).lower() in {"year", "month", "day"} and value:
+            values[name.group(1).lower()] = unescape(value.group(1)).strip()
+    return values
+
 
 def change_name(email, password, new_last_name, new_first_name=None, new_last_kana=None, new_first_kana=None, new_nickname=None, new_dob=None):
     """
@@ -278,6 +289,23 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
                     return {"success": False, "message": f"Lỗi: {error_match.group(1)}"}
             
             # Kiểm tra xem có thông báo thành công không
+            if new_dob:
+                try:
+                    verify_response = session.get(MEMBER_REGIST_URL, headers=headers, timeout=30)
+                except requests.RequestException as e:
+                    return {"success": False, "message": f"Could not verify the date of birth after submission: {e}"}
+                if verify_response.status_code != 200 or "member_regist.html" not in verify_response.url:
+                    return {"success": False, "message": "Could not reload the edit form to verify the date of birth."}
+                saved_fields = extract_form_date_values(verify_response.text)
+                try:
+                    expected_date = tuple(int(part) for part in dob_parts.groups())
+                    saved_date = tuple(int(saved_fields[field]) for field in ("year", "month", "day"))
+                except (KeyError, ValueError):
+                    return {"success": False, "message": "The server did not return all date fields needed for verification."}
+                if saved_date != expected_date:
+                    return {"success": False, "message": "The server did not save the new date of birth; local data was left unchanged."}
+                return {"success": True, "message": "The server saved and verified the new date of birth."}
+
             if "success" in response.text.lower() or "完了" in response.text or "変更" in response.text:
                 return {"success": True, "message": "Đổi tên thành công!"}
             
