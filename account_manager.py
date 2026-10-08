@@ -5,6 +5,7 @@ import requests
 import time
 import re
 from html import unescape
+from html.parser import HTMLParser
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime
 from PySide6.QtWidgets import (
@@ -67,8 +68,91 @@ def fetch_edit_profile(session, headers):
     return profile
 
 
+class MypageMemberInfoParser(HTMLParser):
+    """Extract labeled fields from the member-info dl blocks, including bare text values."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.items = []
+        self.current = None
+        self.mode = None
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "dl" and "block-mypage-member-info-item" in attrs.get("class", "").split():
+            self.current = {"label": [], "value": [], "bare": []}
+            self.mode = None
+        elif self.current is not None and tag == "dt":
+            self.mode = "label"
+        elif self.current is not None and tag == "dd":
+            self.mode = "value"
+        elif self.current is not None and tag == "br" and self.mode == "label":
+            self.current["label"].append(" ")
+
+    def handle_data(self, data):
+        if self.current is None:
+            return
+        if self.mode == "label":
+            self.current["label"].append(data)
+        elif self.mode == "value":
+            self.current["value"].append(data)
+        else:
+            self.current["bare"].append(data)
+
+    def handle_endtag(self, tag):
+        if self.current is None:
+            return
+        if tag in ("dt", "dd"):
+            self.mode = None
+        elif tag == "dl":
+            label = re.sub(r"\s+", "", "".join(self.current["label"]))
+            value = "".join(self.current["value"]).strip()
+            if not value:
+                value = "".join(self.current["bare"]).strip()
+            if label:
+                self.items.append((label, value))
+            self.current = None
+            self.mode = None
+
+
+def parse_member_mypage_html(html):
+    parser = MypageMemberInfoParser()
+    parser.feed(html)
+    field_map = {
+        "\u6c0f\u540d\uff08\u6f22\u5b57\uff09": ("last_name_kanji", "first_name_kanji"),
+        "\u6c0f\u540d\uff08\u30ab\u30ca\uff09": ("last_name_kana", "first_name_kana"),
+        "\u30cb\u30c3\u30af\u30cd\u30fc\u30e0": "nickname",
+        "\u751f\u5e74\u6708\u65e5": "dob", "\u6027\u5225": "gender",
+        "\u30e1\u30fc\u30eb\u30a2\u30c9\u30ec\u30b9": "email",
+        "\u30d0\u30f3\u30c0\u30a4\u30ca\u30e0\u30b3ID": "bandai_namco_id_status",
+        "\u30dd\u30a4\u30f3\u30c8\u898f\u7d04": "points_terms_status",
+        "\u90f5\u4fbf\u756a\u53f7": "postal_code", "\u90fd\u9053\u5e9c\u770c": "prefecture",
+        "\u5e02\u533a\u753a\u6751": "city", "\u4e01\u76ee\u30fb\u756a\u5730": "address_number",
+        "\u30d3\u30eb\u30fb\u30de\u30f3\u30b7\u30e7\u30f3\u540d\u30fb\u90e8\u5c4b\u756a\u53f7": "building",
+        "\u96fb\u8a71\u756a\u53f7": "phone",
+    }
+    profile = {}
+    for label, value in parser.items:
+        key = field_map.get(label)
+        if not value or not key:
+            continue
+        if isinstance(key, tuple):
+            parts = value.split()
+            if parts:
+                profile[key[0]] = parts[0]
+            if len(parts) > 1:
+                profile[key[1]] = " ".join(parts[1:])
+        else:
+            profile[key] = value
+
+    plain_text = unescape(re.sub(r"<[^>]+>", " ", html))
+    points = re.search(r"\u73fe\u5728\u306e\u30dd\u30a4\u30f3\u30c8\s*[:：]?\s*([0-9]+\s*\u30dd\u30a4\u30f3\u30c8)", plain_text)
+    if points:
+        profile["current_points"] = re.sub(r"\s+", " ", points.group(1)).strip()
+    return profile
+
+
 def fetch_member_profile(session, headers):
-    """Read the profile summary shown on the authenticated member mypage."""
+    """Fetch and parse the authenticated member page, then fill missing fields from edit form."""
     url = "https://parks2.bandainamco-am.co.jp/member_mypage.html"
     profile_headers = dict(headers)
     profile_headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
@@ -81,48 +165,12 @@ def fetch_member_profile(session, headers):
     if response.status_code != 200 or "member_mypage" not in response.url:
         return fetch_edit_profile(session, profile_headers)
 
-    html = re.sub(r'<(script|style)\b[^>]*>.*?</\1>', ' ', response.text, flags=re.I | re.S)
-    text = unescape(re.sub(r'<[^>]+>', ' ', html))
-    text = re.sub(r'\s+', ' ', text)
-    profile = {}
-
-    def read_after(label):
-        match = re.search(re.escape(label) + r'\s*[:：]?\s*([^|]{1,100}?)(?=\s+(?:氏名|ニックネーム|生年月日|性別|メールアドレス|バンダイナムコID|ポイント規約|郵便番号|都道府県|市区町村|丁目・番地|ビル・マンション名|電話番号|■|現在のポイント)|$)', text)
-        return match.group(1).strip() if match else ""
-
-    name = read_after("氏名（漢字）")
-    name_parts = name.split()
-    if name_parts:
-        profile["last_name_kanji"] = name_parts[0]
-        if len(name_parts) > 1:
-            profile["first_name_kanji"] = " ".join(name_parts[1:])
-    name = read_after("氏名（カナ）")
-    name_parts = name.split()
-    if name_parts:
-        profile["last_name_kana"] = name_parts[0]
-        if len(name_parts) > 1:
-            profile["first_name_kana"] = " ".join(name_parts[1:])
-
-    labels = {
-        "ニックネーム": "nickname", "生年月日": "dob", "性別": "gender",
-        "メールアドレス": "email", "郵便番号": "postal_code",
-        "都道府県": "prefecture", "市区町村": "city", "丁目・番地": "address_number",
-        "ビル・マンション名・": "building", "電話番号": "phone",
-        "現在のポイント": "current_points", "バンダイナムコID": "bandai_namco_id_status",
-        "ポイント規約": "points_terms_status",
-    }
-    for label, key in labels.items():
-        value = read_after(label)
-        if key == "building":
-            value = re.sub(r'^部屋番号\s*', '', value)
-        if value:
-            profile[key] = value
+    profile = parse_member_mypage_html(response.text)
     if profile:
         for key, value in fetch_edit_profile(session, profile_headers).items():
             profile.setdefault(key, value)
         return profile
-    return fetch_edit_profile(session, headers)
-
+    return fetch_edit_profile(session, profile_headers)
 
 def inspect_login_handoff(session, headers, redirect_url, language):
     """Follow the offered 'later' button to finish the Parks2 login without creating a passkey."""
