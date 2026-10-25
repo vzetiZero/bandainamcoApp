@@ -20,10 +20,13 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import requests
 
+from app.config import (
+    ACCOUNT_ORIGIN, API_URL, CLIENT_ID, LOGIN_URL, REDIRECT_URI, USER_AGENT,
+)
 from app.domain.ip_rules import IPLockoutError, is_ip_lockout
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,17 +35,61 @@ PROXY_FILE = os.path.join(APP_DIR, "proxy.txt")
 MODE_PER_REQUEST = "per_request"
 MODE_PER_SESSION = "per_session"
 
-# Trang dùng để thử proxy: chính là trang đăng nhập của ứng dụng.
-TEST_URL = "https://account.bandainamcoid.com/login.html"
+# Proxy check gọi v3/login/init của account-api (endpoint app thật sự dùng) thay vì
+# trang login tĩnh: trang login trả 200 cho mọi IP nên không nói lên điều gì, còn
+# init xác nhận proxy thông được tới account-api và trả JSON đúng định dạng. Nếu
+# body có dấu hiệu chặn IP thì proxy bị đánh dấu hỏng và vào danh sách tạm nghỉ.
+CHECK_PARAMS = {
+    "client_id": CLIENT_ID, "redirect_uri": REDIRECT_URI, "customize_id": "",
+    "language": "ja", "prompt": "", "sns_not_found": "", "lockout_child": "",
+    "cookie": "{}", "backto": "", "response_type": "", "scope": "", "state": "",
+    "nonce": "",
+}
+CHECK_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+    "Origin": ACCOUNT_ORIGIN,
+    "Referer": LOGIN_URL,
+}
+CHECK_OK_MESSAGE = "IP không bị chặn"
+CHECK_BLOCKED_MESSAGE = "IP bị chặn (UnexpectedRemoteAddress)"
+
 TEST_TIMEOUT = 12
 TEST_WORKERS = 10
 
 SUPPORTED_SCHEMES = ("http", "https", "socks4", "socks5", "socks5h")
 
 # Số proxy tối đa thử cho MỘT request khi IP bị site chặn.
-PROXY_ATTEMPTS = 3
-# Proxy vừa bị chặn được tạm nghỉ bao nhiêu giây trước khi vòng luân phiên thử lại.
-BLOCK_COOLDOWN = 300
+PROXY_ATTEMPTS = 5
+# Proxy bị chặn được đưa vào danh sách tạm nghỉ bao nhiêu giây trước khi dùng lại.
+# IP vào blacklist thường không hết nhanh, nên để dài hơn một lần kiểm tra.
+BLOCK_COOLDOWN = 1800
+
+# UI nối hàm nhận log vào đây (worker thread đẩy message, UI tự đổ ra QTextEdit).
+_event_sink = None
+
+
+def set_event_sink(sink):
+    """Đặt hàm nhận log sự kiện proxy; gọi được từ worker thread."""
+    global _event_sink
+    _event_sink = sink
+
+
+def _emit_event(message):
+    sink = _event_sink
+    if sink is None:
+        return
+    try:
+        sink(message)
+    except Exception:  # Log lỗi không được làm hỏng request
+        pass
+
+
+def request_label(method, url):
+    """Host + path của request; KHÔNG lấy query vì init mang cookie trong query."""
+    parts = urlsplit(url)
+    return "%s %s%s" % (method, parts.netloc, parts.path)
 
 
 def parse_proxy(line):
@@ -141,29 +188,43 @@ def response_is_ip_lockout(response):
         return False
 
 
-def check_proxy(proxy, url=TEST_URL, timeout=TEST_TIMEOUT):
-    """Thử một proxy. Trả về (ok, message)."""
+def check_proxy(proxy, timeout=TEST_TIMEOUT):
+    """Thử một proxy bằng account-api. Trả về (ok, message)."""
     session = requests.Session()
     session.trust_env = False  # Không để proxy hệ thống ảnh hưởng kết quả
     try:
-        response = session.get(url, proxies=as_requests_proxies(proxy), timeout=timeout)
+        response = session.get(f"{API_URL}v3/login/init", params=CHECK_PARAMS,
+                               headers=CHECK_HEADERS,
+                               proxies=as_requests_proxies(proxy), timeout=timeout)
     except requests.RequestException as exc:
         message = str(exc).strip() or exc.__class__.__name__
         return False, message[:120]
     finally:
         session.close()
-    if response.status_code < 400:
-        return True, "HTTP %d" % response.status_code
-    return False, "HTTP %d" % response.status_code
+    if response.status_code >= 400:
+        return False, "HTTP %d" % response.status_code
+    try:
+        payload = response.json()
+    except ValueError:
+        return False, "Phản hồi không phải JSON"
+    if is_ip_lockout(payload):
+        return False, CHECK_BLOCKED_MESSAGE
+    if payload.get("result") != "OK":
+        return False, "result=%s" % payload.get("result")
+    return True, CHECK_OK_MESSAGE
 
 
-def check_all_proxies(proxies, emit, is_running=None, url=TEST_URL, timeout=TEST_TIMEOUT):
+def check_all_proxies(proxies, emit, is_running=None, timeout=TEST_TIMEOUT, manager=None):
     """
     Kiểm tra song song danh sách proxy.
     emit(index, ok, message) được gọi ngay khi từng proxy có kết quả.
+    Proxy bị chặn IP được đưa luôn vào danh sách tạm nghỉ của `manager`
+    (mặc định là proxy_manager dùng chung).
     """
+    target = manager or proxy_manager
+
     def task(index):
-        return index, check_proxy(proxies[index], url, timeout)
+        return index, check_proxy(proxies[index], timeout)
 
     with ThreadPoolExecutor(max_workers=TEST_WORKERS) as pool:
         futures = [pool.submit(task, index) for index in range(len(proxies))]
@@ -171,6 +232,11 @@ def check_all_proxies(proxies, emit, is_running=None, url=TEST_URL, timeout=TEST
             if is_running is not None and not is_running():
                 break
             index, (ok, message) = future.result()
+            proxy = as_requests_proxies(proxies[index])
+            if ok:
+                target.unblock(proxy)  # IP đã dùng được lại -> ra khỏi danh sách tạm nghỉ
+            elif message == CHECK_BLOCKED_MESSAGE:
+                target.mark_blocked(proxy)
             emit(index, ok, message)
 
 
@@ -225,17 +291,29 @@ class ProxySession(requests.Session):
                 request_kwargs["proxies"] = proxies
             response = super().request(method, url, **request_kwargs)
 
+            if manager.enabled:
+                _emit_event("%s · proxy %s · HTTP %d" % (
+                    request_label(method, url),
+                    manager.label_of(proxies) or "trực tiếp (proxy đang tắt)",
+                    response.status_code))
+
             if not manager.enabled or not response_is_ip_lockout(response):
                 return response
 
             # IP của proxy này đã bị blacklist: cho nghỉ rồi gửi lại bằng proxy khác.
             manager.mark_blocked(proxies)
             response.close()
-            last_error = IPLockoutError(proxy=manager.label_of(proxies))
+            label = manager.label_of(proxies) or "?"
+            _emit_event("⚠ %s bị chặn IP → đưa vào danh sách tạm nghỉ %d phút"
+                        % (label, BLOCK_COOLDOWN // 60))
+            last_error = IPLockoutError(proxy=label)
             if attempt < attempts:
                 proxies = self._rotate_proxies()
                 if not proxies:
                     break
+                _emit_event("↻ gửi lại %s bằng proxy %s"
+                            % (request_label(method, url),
+                               manager.label_of(proxies) or "trực tiếp"))
 
         raise last_error or IPLockoutError()
 
@@ -298,27 +376,69 @@ class ProxyManager:
             self._blocked[url] = time.monotonic() + seconds
         return self.label_of(proxies)
 
+    def unblock(self, proxies):
+        """Proxy vừa kiểm tra thấy dùng được: bỏ khỏi danh sách tạm nghỉ."""
+        url = (proxies or {}).get("https") or (proxies or {}).get("http")
+        if not url:
+            return
+        with self._lock:
+            self._blocked.pop(url, None)
+
     def blocked_count(self):
         """Số proxy đang trong thời gian tạm nghỉ."""
         now = time.monotonic()
         with self._lock:
             return sum(1 for until in self._blocked.values() if until > now)
 
+    def is_blocked(self, proxy):
+        """Proxy có đang nằm trong danh sách tạm nghỉ hay không."""
+        with self._lock:
+            return self._blocked.get(proxy_url(proxy), 0.0) > time.monotonic()
+
+    def blocked_remaining(self, proxy):
+        """Số giây còn lại của proxy đang tạm nghỉ; 0 khi không bị chặn."""
+        with self._lock:
+            remaining = self._blocked.get(proxy_url(proxy), 0.0) - time.monotonic()
+        return max(0, int(remaining))
+
+    def blocked_entries(self):
+        """Danh sách proxy đang tạm nghỉ: [(host:port, số giây còn lại)], sắp theo thời gian."""
+        now = time.monotonic()
+        with self._lock:
+            entries = [(url, int(until - now)) for url, until in self._blocked.items()
+                       if until > now]
+        result = []
+        for url, remaining in entries:
+            label = url.split("@", 1)[1] if "@" in url else url.split("://", 1)[-1]
+            result.append((label, remaining))
+        return sorted(result, key=lambda item: item[1])
+
+    def reset_blocks(self):
+        """Bỏ toàn bộ danh sách tạm nghỉ để thử lại tất cả proxy ngay."""
+        with self._lock:
+            count = len(self._blocked)
+            self._blocked.clear()
+        return count
+
     def _pick_proxy(self, now):
-        """Proxy kế tiếp chưa bị chặn. Gọi khi đã giữ `_lock`."""
+        """Proxy kế tiếp chưa bị chặn. Gọi khi đã giữ `_lock`.
+
+        Trả (proxy, reused_blocked): reused_blocked=True khi mọi proxy đều đang
+        tạm nghỉ và phải dùng lại proxy hết hạn sớm nhất.
+        """
         total = len(self.proxies)
         for _ in range(total):
             proxy = self.proxies[self._cursor % total]
             self._cursor += 1
             if self._blocked.get(proxy_url(proxy), 0.0) <= now:
-                return proxy
+                return proxy, False
         # Tất cả đang tạm nghỉ: mở lại proxy hết hạn sớm nhất để app không kẹt hẳn.
         stale = min(self._blocked, key=self._blocked.get)
         self._blocked.pop(stale, None)
         for proxy in self.proxies:
             if proxy_url(proxy) == stale:
-                return proxy
-        return self.proxies[0]
+                return proxy, True
+        return self.proxies[0], True
 
     def next_proxies(self):
         """Lấy dict proxies của proxy kế tiếp; None khi proxy đang tắt."""
@@ -327,8 +447,12 @@ class ProxyManager:
         with self._lock:
             if not self.proxies:
                 return None
-            proxy = self._pick_proxy(time.monotonic())
-        return as_requests_proxies(proxy)
+            proxy, reused_blocked = self._pick_proxy(time.monotonic())
+        proxies = as_requests_proxies(proxy)
+        if reused_blocked:
+            _emit_event("⚠ tất cả proxy đang tạm nghỉ - dùng lại %s"
+                        % self.label_of(proxies))
+        return proxies
 
     def new_session(self):
         """Tạo session HTTP dùng proxy theo cấu hình hiện tại."""

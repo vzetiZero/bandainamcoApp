@@ -1,4 +1,5 @@
 import os
+import queue
 from datetime import datetime
 import webbrowser
 from PySide6.QtWidgets import (
@@ -12,7 +13,9 @@ from PySide6.QtCore import Qt, QTimer, QSize, QEvent
 from PySide6.QtGui import QAction, QIcon, QFont, QColor, QPixmap, QShortcut, QKeySequence
 
 from icon_helper import load_svg_icon, AppIcons
-from proxy_manager import MODE_PER_REQUEST, MODE_PER_SESSION, PROXY_FILE, proxy_manager
+from proxy_manager import (
+    MODE_PER_REQUEST, MODE_PER_SESSION, PROXY_FILE, proxy_manager, set_event_sink,
+)
 
 from app.config import DEFAULT_CONCURRENCY, ICONS_DIR, MAX_CONCURRENCY, PROXY_FORMAT_HINT
 from app.container import build_container
@@ -126,6 +129,15 @@ class AccountManager(QMainWindow):
         self.log_panel.setMinimumWidth(180)
         self.log_panel.hide()
         list_layout.addWidget(self.log_panel, 1)
+
+        # Log request/proxy: worker thread chỉ đẩy message vào queue, UI đổ ra
+        # QTextEdit theo timer nên không gọi widget Qt từ thread khác.
+        self.proxy_log_queue = queue.Queue()
+        set_event_sink(self.proxy_log_queue.put)
+        self.proxy_log_timer = QTimer(self)
+        self.proxy_log_timer.timeout.connect(self.flush_proxy_log)
+        self.proxy_log_timer.start(250)
+
         self.tab_widget.addTab(self.list_tab, load_svg_icon(AppIcons.FOLDER_OPEN, 16), "Danh sách tài khoản")
         # campaigns và campaign_signups thuộc CampaignService, đã load trong load_data.
         self.campaign_states = {}   # row -> trạng thái, để cảnh báo mở đăng ký đúng 1 lần
@@ -291,7 +303,8 @@ class AccountManager(QMainWindow):
             "Mỗi request (đăng nhập, kiểm tra tài khoản, đổi tên) sẽ dùng proxy lấy từ file "
             "proxy.txt theo định dạng ip:port:username:pass. Khi tắt proxy, request đi thẳng "
             "như trước. Nếu site báo chặn IP (UnexpectedRemoteAddress), app tự đổi sang proxy "
-            "khác và gửi lại request."
+            "khác và gửi lại request; proxy bị chặn được đưa vào danh sách tạm nghỉ 30 phút "
+            "(xem bằng nút DS tạm nghỉ). Nhật ký ghi rõ từng request đi qua proxy nào."
         )
         explanation.setWordWrap(True)
         proxy_layout.addWidget(explanation)
@@ -334,8 +347,16 @@ class AccountManager(QMainWindow):
         open_button = QPushButton("Mở file proxy")
         open_button.setIcon(load_svg_icon(AppIcons.FOLDER_OPEN, 16))
         open_button.clicked.connect(self.open_proxy_file)
+        blocked_button = QPushButton("DS tạm nghỉ")
+        blocked_button.setToolTip("Xem các proxy đang bị site chặn IP và bị tạm nghỉ")
+        blocked_button.clicked.connect(self.show_blocked_proxies)
+        reset_button = QPushButton("Bỏ tạm nghỉ")
+        reset_button.setToolTip("Cho phép dùng lại toàn bộ proxy đang tạm nghỉ")
+        reset_button.clicked.connect(self.reset_proxy_blocks)
         actions.addWidget(check_button)
         actions.addWidget(open_button)
+        actions.addWidget(blocked_button)
+        actions.addWidget(reset_button)
         actions.addStretch(1)
         proxy_layout.addLayout(actions)
 
@@ -423,14 +444,26 @@ class AccountManager(QMainWindow):
         self.update_proxy_status()
 
     def update_proxy_status(self):
+        self.refresh_proxy_status_label()
+        if proxy_manager.enabled and proxy_manager.proxies:
+            scope = "mỗi request" if proxy_manager.mode == MODE_PER_REQUEST else "mỗi phiên"
+            self.status_bar.showMessage("Proxy: %d (%s)" % (len(proxy_manager.proxies), scope), 4000)
+
+    def refresh_proxy_status_label(self):
+        """Chỉ cập nhật nhãn trạng thái proxy, không đụng status bar."""
         status = proxy_manager.status_text()
         detail = "%s  ·  %s" % (status, proxy_manager.path)
         if proxy_manager.errors:
             detail += "  ·  bỏ qua %d dòng lỗi" % len(proxy_manager.errors)
         self.proxy_status_label.setText(detail)
-        if proxy_manager.enabled and proxy_manager.proxies:
-            scope = "mỗi request" if proxy_manager.mode == MODE_PER_REQUEST else "mỗi phiên"
-            self.status_bar.showMessage("Proxy: %d (%s)" % (len(proxy_manager.proxies), scope), 4000)
+
+    def proxy_row_status(self, proxy):
+        """Trạng thái hiển thị trong bảng: tạm nghỉ kèm đếm ngược, hoặc chưa kiểm tra."""
+        remaining = proxy_manager.blocked_remaining(proxy)
+        if remaining:
+            minutes, seconds = divmod(remaining, 60)
+            return "Tạm nghỉ (bị chặn IP) %d:%02d" % (minutes, seconds)
+        return "Chưa kiểm tra"
 
     def refresh_proxy_table(self):
         proxies = proxy_manager.proxies
@@ -438,13 +471,16 @@ class AccountManager(QMainWindow):
         for row, proxy in enumerate(proxies):
             password = proxy.get("password", "")
             values = [str(row + 1), proxy.get("host", ""), str(proxy.get("port", "")),
-                      proxy.get("username", ""), ("\u2022" * 8) if password else "", "Chưa kiểm tra"]
+                      proxy.get("username", ""), ("\u2022" * 8) if password else "",
+                      self.proxy_row_status(proxy)]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if col in (0, 2):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 if col == 4 and password:
                     item.setToolTip(password)
+                if col == 5 and proxy_manager.blocked_remaining(proxy):
+                    item.setForeground(QColor("#dc3545"))
                 self.proxy_table.setItem(row, col, item)
 
     def browse_proxy_file(self):
@@ -512,9 +548,37 @@ class AccountManager(QMainWindow):
         total = self.proxy_table.rowCount()
         working = sum(1 for row in range(total)
                       if (self.proxy_table.item(row, 5) or QTableWidgetItem("")).text().startswith("\u2713"))
-        self.proxy_status_label.setText("Kiểm tra xong: %d/%d proxy hoạt động" % (working, total))
-        self.log("Kiểm tra proxy: %d/%d hoạt động" % (working, total))
+        blocked = proxy_manager.blocked_count()
+        suffix = " · %d tạm nghỉ (bị chặn IP)" % blocked if blocked else ""
+        self.proxy_status_label.setText(
+            "Kiểm tra xong: %d/%d proxy hoạt động%s" % (working, total, suffix))
+        self.log("Kiểm tra proxy: %d/%d hoạt động%s" % (working, total, suffix))
+        if blocked:
+            self.log("Đã đưa %d proxy bị chặn IP vào danh sách tạm nghỉ" % blocked)
         self.status_bar.showMessage("Kiểm tra proxy: %d hoạt động" % working, 5000)
+
+    def show_blocked_proxies(self):
+        """Liệt kê proxy đang tạm nghỉ để người dùng biết IP nào bị site chặn."""
+        entries = proxy_manager.blocked_entries()
+        if not entries:
+            QMessageBox.information(self, "Proxy tạm nghỉ",
+                                    "Không có proxy nào đang tạm nghỉ.")
+            return
+        lines = []
+        for label, remaining in entries[:100]:
+            minutes, seconds = divmod(remaining, 60)
+            lines.append("%s  -  còn %d:%02d" % (label, minutes, seconds))
+        if len(entries) > 100:
+            lines.append("... và %d proxy nữa" % (len(entries) - 100))
+        QMessageBox.information(self, "Proxy tạm nghỉ (%d)" % len(entries),
+                                "\n".join(lines))
+
+    def reset_proxy_blocks(self):
+        """Bỏ danh sách tạm nghỉ để lần kiểm tra sau dùng lại mọi proxy."""
+        count = proxy_manager.reset_blocks()
+        self.refresh_proxy_table()
+        self.refresh_proxy_status_label()
+        self.log("Đã bỏ tạm nghỉ %d proxy - lần kiểm tra sau sẽ dùng lại" % count)
 
     def refresh_campaign_table(self):
         """Redraw the campaign table, deriving status and countdown from the dates."""
@@ -1386,6 +1450,7 @@ class AccountManager(QMainWindow):
         self.save_data()
         self.row_progress.clear()
         self.update_table()
+        self.refresh_proxy_status_label()
         self.log("Hoàn tất kiểm tra")
 
     # ============================================================
@@ -1622,6 +1687,15 @@ class AccountManager(QMainWindow):
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_text.append(f"[{timestamp}] {message}")
 
+    def flush_proxy_log(self):
+        """Đổ log request/proxy do worker thread gửi vào ô nhật ký."""
+        for _ in range(200):
+            try:
+                message = self.proxy_log_queue.get_nowait()
+            except queue.Empty:
+                break
+            self.log(message)
+
     def set_log_panel_visible(self, visible):
         """Nút trên toolbar bật/tắt bảng nhật ký; nhãn nút phản ánh thao tác kế tiếp."""
         self.log_panel.setVisible(visible)
@@ -1826,6 +1900,10 @@ class AccountManager(QMainWindow):
             worker.stop()
         if self.proxy_check_worker is not None and self.proxy_check_worker.isRunning():
             self.proxy_check_worker.stop()
+
+        self.proxy_log_timer.stop()
+        set_event_sink(None)
+        self.flush_proxy_log()
 
         self.save_data()
         event.accept()

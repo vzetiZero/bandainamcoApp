@@ -365,9 +365,11 @@ IP của proxy nằm trong blacklist — **không phải** lỗi tài khoản.
 |---|---|
 | `app/domain/ip_rules.py` | `is_ip_lockout()` quét dict/chuỗi/bytes tìm dấu hiệu chặn IP; `IPLockoutError`; `IP_LOCKOUT_REASON` (dùng chung với `describe_login_error`) |
 | `response_is_ip_lockout()` | Chỉ đọc body khi response là JSON hoặc có mã lỗi (trang HTML thường không chứa dấu hiệu) |
-| `ProxySession.request()` | Gặp lỗi chặn IP → `mark_blocked()` proxy vừa dùng rồi **gửi lại request bằng proxy kế tiếp**, tối đa `PROXY_ATTEMPTS = 3` proxy/request. Ở `MODE_PER_SESSION`, proxy mới thay luôn proxy cố định để request sau không quay lại IP chết |
-| `ProxyManager._blocked` | Proxy bị chặn nghỉ `BLOCK_COOLDOWN = 300` giây; `next_proxies()` bỏ qua. Khi tất cả đều nghỉ thì mở lại proxy hết hạn sớm nhất để app không kẹt hẳn |
-| `ProxyManager.status_text()` | Thêm "N tạm nghỉ do bị chặn IP" |
+| `ProxySession.request()` | Gặp lỗi chặn IP → `mark_blocked()` proxy vừa dùng rồi **gửi lại request bằng proxy kế tiếp**, tối đa `PROXY_ATTEMPTS = 5` proxy/request. Ở `MODE_PER_SESSION`, proxy mới thay luôn proxy cố định để request sau không quay lại IP chết |
+| `ProxyManager._blocked` | Proxy bị chặn nghỉ `BLOCK_COOLDOWN = 1800` giây (30 phút); `next_proxies()` bỏ qua. Khi tất cả đều nghỉ thì mở lại proxy hết hạn sớm nhất để app không kẹt hẳn |
+| `ProxyManager.blocked_entries()` / `reset_blocks()` | Danh sách tạm nghỉ (host:port + đếm ngược) và nút **DS tạm nghỉ** / **Bỏ tạm nghỉ** ở tab Cấu hình; bảng proxy hiện "Tạm nghỉ (bị chặn IP) mm:ss" |
+| `set_event_sink()` + `flush_proxy_log()` | Worker thread đẩy log vào `queue.Queue`, `QTimer` 250ms đổ ra `log_text` — mỗi request ghi `METHOD host/path · proxy host:port · HTTP status`, mỗi lần chặn ghi proxy bị đưa vào tạm nghỉ và proxy dùng để gửi lại. Không log query (query của `login/init` chứa cookie) |
+| `check_proxy()` | Gọi `v3/login/init` của account-api thay vì `login.html` (trang login trả 200 cho mọi IP). Proxy không tới được API, trả JSON lỗi hoặc có dấu hiệu chặn IP → đánh dấu ✗ và tự vào danh sách tạm nghỉ; proxy kiểm tra lại thấy OK → tự ra khỏi danh sách |
 | `BandaiAuthClient` | Lỗi nằm trong `data.msg` (HTTP 200) cũng bị bắt → chạy lại cả luồng login/handoff/hồ sơ bằng session mới (`IP_LOCKOUT_ATTEMPTS = 2`, cookie làm mới). Hết proxy → `LoginOutcome(reason=IP_LOCKOUT_REASON)` thay vì báo sai mật khẩu |
 
 ### Điểm nối vào luồng chính
