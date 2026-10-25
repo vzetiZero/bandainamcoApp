@@ -171,7 +171,8 @@ class AccountDetailsDialog(QDialog):
         ("current_points", "Điểm hiện tại"), ("bandai_namco_id_status", "Bandai Namco ID"),
         ("points_terms_status", "Điều khoản điểm"),
         ("profile_fetch_status", "Trạng thái lấy hồ sơ"), ("gender_code", "Mã giới tính"),
-        ("status", "Trạng thái"), ("last_check", "Kiểm tra lần cuối"),
+        ("profile_loaded_at", "Hồ sơ đọc lúc"), ("status", "Trạng thái"),
+        ("last_check", "Kiểm tra lần cuối"),
     ]
 
     def __init__(self, account, parent=None):

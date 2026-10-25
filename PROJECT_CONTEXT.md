@@ -462,7 +462,9 @@ redirect URL từ server → parse code
 
 **Bẻ nhánh quan trọng:** handoff fail **không** đồng nghĩa Parks2 không dùng được.
 `BandaiAuthClient.authenticate()` luôn gọi thêm `fetch_member_profile()` và chỉ ghi đè
-`profile_fetch_status` khi lấy được hồ sơ.
+`profile_fetch_status` khi lấy được hồ sơ. Mỗi lần đọc hồ sơ thành công,
+`AccountService.apply_profile()` ghi thêm `profile_loaded_at` (thời điểm đăng nhập
+thành công gần nhất) — khác với `last_check` là lần **thử** gần nhất, kể cả thất bại.
 
 ### 5.2 Đọc hồ sơ — `fetch_member_profile()`
 

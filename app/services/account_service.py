@@ -83,4 +83,7 @@ class AccountService:
         if account is None:
             return 0
         account.update(profile)
+        # Mốc đọc hồ sơ thành công gần nhất: `last_check` chỉ là lần thử gần nhất
+        # (có thể thất bại), còn trường này xác nhận lần đăng nhập thật sự thành công.
+        account["profile_loaded_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return len(profile_fields(profile))
