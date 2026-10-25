@@ -17,10 +17,12 @@ from PySide6.QtWidgets import (
     QSplitter, QFrame, QComboBox, QCheckBox, QDialog,
     QDialogButtonBox, QFormLayout, QTabWidget, QGroupBox,
     QScrollArea, QSizePolicy, QSpacerItem, QAbstractItemView,
-    QTableWidgetItem, QHeaderView, QMenu, QInputDialog
+    QTableWidgetItem, QHeaderView, QMenu, QInputDialog,
+    QStyledItemDelegate, QStyleOptionViewItem, QStyle
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QPoint, QSettings
-from PySide6.QtGui import QAction, QIcon, QFont, QColor, QPalette, QLinearGradient, QBrush, QPainter, QPixmap
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QPoint, QSettings, QEvent, QRectF
+from PySide6.QtGui import (QAction, QIcon, QFont, QColor, QPalette, QLinearGradient, QBrush,
+                           QPainter, QPixmap, QShortcut, QKeySequence, QPen)
 
 from icon_helper import load_svg_icon, AppIcons
 from proxy_manager import (
@@ -40,6 +42,59 @@ PROXY_FORMAT_HINT = "ip:port:username:pass"
 # env_info.ua phải khớp chính xác header User-Agent, nếu không client tự mâu thuẫn về thiết bị của mình
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+# Cột của bảng tài khoản: (nhãn header, key trong dict account)
+ACCOUNT_COLUMNS = [
+    ("Email", "email"), ("Password", "__password__"),
+    ("Status", "status"), ("Last check", "last_check"),
+    ("Last name (Kanji)", "last_name_kanji"), ("First name (Kanji)", "first_name_kanji"),
+    ("Last name (Kana)", "last_name_kana"), ("First name (Kana)", "first_name_kana"),
+    ("Nickname", "nickname"), ("Gender", "gender"),
+    ("Postal code", "postal_code"), ("Prefecture", "prefecture"), ("City", "city"),
+    ("Address", "address_number"), ("Building", "building"), ("Phone", "phone"),
+    ("Points", "current_points"), ("Bandai Namco ID", "bandai_namco_id_status"),
+    ("Points terms", "points_terms_status"), ("Profile access", "profile_fetch_status"),
+    ("Gender code", "gender_code"),
+]
+
+STATUS_BADGE_COLORS = {
+    "Hoạt động": "#28a745",
+    "Không hoạt động": "#dc3545",
+    "Chưa kiểm tra": "#8a94a6",
+}
+
+
+class StatusDelegate(QStyledItemDelegate):
+    """Vẽ cột Status thành badge bo tròn thay vì chữ tô màu."""
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem()
+        self.initStyleOption(opt, index)
+        text = opt.text
+        color = STATUS_BADGE_COLORS.get(text)
+        if color is None:
+            super().paint(painter, option, index)
+            return
+        opt.text = ""
+        widget = option.widget
+        style = widget.style() if widget else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, widget)
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setFont(option.font)
+        width = painter.fontMetrics().horizontalAdvance(text) + 18
+        height = min(option.rect.height() - 8, 22)
+        rect = QRectF(option.rect.center().x() - width / 2,
+                      option.rect.center().y() - height / 2, width, height)
+        tint = QColor(color)
+        tint.setAlpha(40)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(tint))
+        painter.drawRoundedRect(rect, height / 2, height / 2)
+        painter.setPen(QPen(QColor(color)))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        painter.restore()
 
 
 def fetch_edit_profile(session, headers):
@@ -795,6 +850,9 @@ class AccountManager(QMainWindow):
         self.workers = []
         self.pending_name_changes = {}
         self.ui_settings = QSettings("NAMCO", "AccountManager")
+        self.hidden_columns = set(json.loads(self.ui_settings.value("hidden_account_columns", "[]")))
+        self.sort_key = None
+        self.sort_asc = True
         
         self.setup_ui()
         self.load_data()
@@ -854,6 +912,17 @@ class AccountManager(QMainWindow):
 
         self.settings_tab = self.create_settings_tab()
         self.tab_widget.addTab(self.settings_tab, load_svg_icon(AppIcons.SETTINGS, 16), "C\u1ea5u h\u00ecnh")
+
+        # Ph\u00edm t\u1eaft to\u00e0n c\u1ee5c
+        input_shortcut = QShortcut(QKeySequence("Ctrl+N"), self)
+        input_shortcut.activated.connect(self.open_input_dialog)
+        import_shortcut = QShortcut(QKeySequence("Ctrl+I"), self)
+        import_shortcut.activated.connect(self.import_from_txt)
+        search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
+        search_shortcut.activated.connect(self.focus_search)
+        delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.table)
+        delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+        delete_shortcut.activated.connect(self.delete_selected)
 
         # Status Bar
         self.status_bar = QStatusBar()
@@ -1595,6 +1664,10 @@ class AccountManager(QMainWindow):
         self.stats_label.setStyleSheet("color: #666; font-size: 14px;")
         self.toolbar.addWidget(self.stats_label)
 
+        self.stats_chip = QLabel("")
+        self.stats_chip.setObjectName("statsChip")
+        self.toolbar.addWidget(self.stats_chip)
+
         appearance_btn = QPushButton("Giao diện")
         appearance_btn.setToolTip("Tùy chỉnh màu sắc, cỡ chữ và mật độ bảng")
         appearance_btn.clicked.connect(self.open_appearance_settings)
@@ -1605,6 +1678,7 @@ class AccountManager(QMainWindow):
         self.input_dialog.raise_()
         self.input_dialog.activateWindow()
         self.text_input.setFocus()
+        self.update_input_preview()
 
     def create_left_panel(self):
         panel = QFrame()
@@ -1626,13 +1700,16 @@ class AccountManager(QMainWindow):
         layout.addWidget(title)
         
         # Format hint
-        hint = QLabel("Định dạng: email|password, mỗi dòng 1 tài khoản")
+        hint = QLabel("Định dạng: email|password, mỗi dòng 1 tài khoản · có thể kéo thả file .txt vào ô dưới")
         hint.setStyleSheet("color: #666; font-size: 12px;")
         layout.addWidget(hint)
         
         # Text Input
         self.text_input = QTextEdit()
         self.text_input.setPlaceholderText("email1|password1\nemail2|password2\n...")
+        self.text_input.setAcceptDrops(True)
+        self.text_input.installEventFilter(self)
+        self.text_input.textChanged.connect(self.update_input_preview)
         self.text_input.setStyleSheet("""
             QTextEdit {
                 border: 1px solid #ced4da;
@@ -1643,6 +1720,11 @@ class AccountManager(QMainWindow):
             }
         """)
         layout.addWidget(self.text_input)
+        
+        self.input_preview = QLabel("")
+        self.input_preview.setObjectName("inputPreview")
+        self.input_preview.setWordWrap(True)
+        layout.addWidget(self.input_preview)
         
         # Buttons - gọn, gom trên một hàng
         def compact_button(text, object_name, icon_name, tip):
@@ -1742,6 +1824,14 @@ class AccountManager(QMainWindow):
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_context_menu)
         self.table.cellDoubleClicked.connect(self.show_account_details)
+        self.table.setItemDelegateForColumn(2, StatusDelegate(self.table))
+        self.table.horizontalHeader().sectionClicked.connect(self.on_header_clicked)
+        self.empty_label = QLabel(self.table)
+        self.empty_label.setObjectName("emptyState")
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label.setWordWrap(True)
+        self.empty_label.hide()
+        self.table.viewport().installEventFilter(self)
         self.table.setStyleSheet("""
             QTableWidget {
                 border: 1px solid #dee2e6;
@@ -1797,6 +1887,11 @@ class AccountManager(QMainWindow):
         self.filter_combo.currentTextChanged.connect(self.apply_filter)
         filter_layout.addWidget(self.filter_combo)
         
+        self.column_button = QPushButton("Cột hiển thị")
+        self.column_button.setToolTip("Chọn cột hiển thị trong bảng")
+        self.column_button.setMenu(self.build_column_menu())
+        filter_layout.addWidget(self.column_button)
+        
         filter_layout.addStretch()
         
         # Search
@@ -1845,6 +1940,9 @@ class AccountManager(QMainWindow):
             QLabel#statValueActive {{ color: #28a745; }}
             QLabel#statValueInactive {{ color: #dc3545; }}
             QLabel#statValueUnchecked {{ color: {muted}; }}
+            QLabel#emptyState {{ background: transparent; color: {muted}; font-size: 12pt; font-weight: 600; padding: 24px; }}
+            QLabel#inputPreview {{ background: transparent; color: {muted}; font-size: 9pt; font-weight: 600; }}
+            QLabel#statsChip {{ background: transparent; color: {muted}; font-size: 10pt; }}
             QPushButton {{ background: #b8fff5; color: #102322; border: 1px solid #3ff2d7; padding: 8px 13px; border-radius: 6px; font-weight: 600; }}
             QPushButton:hover {{ background: #93f7e9; border-color: #20ccb7; color: #102322; }}
             QPushButton:pressed {{ background: #72ead8; }}
@@ -2229,20 +2327,11 @@ class AccountManager(QMainWindow):
     # UI UPDATES
     # ============================================================
     def update_table(self):
-        columns = [
-            ("Email", "email"), ("Password", "__password__"),
-            ("Status", "status"), ("Last check", "last_check"),
-            ("Last name (Kanji)", "last_name_kanji"), ("First name (Kanji)", "first_name_kanji"),
-            ("Last name (Kana)", "last_name_kana"), ("First name (Kana)", "first_name_kana"),
-            ("Nickname", "nickname"), ("Gender", "gender"),
-            ("Postal code", "postal_code"), ("Prefecture", "prefecture"), ("City", "city"),
-            ("Address", "address_number"), ("Building", "building"), ("Phone", "phone"),
-            ("Points", "current_points"), ("Bandai Namco ID", "bandai_namco_id_status"),
-            ("Points terms", "points_terms_status"), ("Profile access", "profile_fetch_status"),
-            ("Gender code", "gender_code"),
-        ]
+        columns = ACCOUNT_COLUMNS
         self.table.setColumnCount(len(columns))
         self.table.setHorizontalHeaderLabels([column[0] for column in columns])
+        for column, (label, key) in enumerate(columns):
+            self.table.setColumnHidden(column, key in self.hidden_columns)
         self.table.setRowCount(len(self.accounts))
         for row, account in enumerate(self.accounts):
             for column, (label, key) in enumerate(columns):
@@ -2251,18 +2340,11 @@ class AccountManager(QMainWindow):
                 else:
                     value = account.get(key)
                     value = "" if value is None else str(value)
-                item = QTableWidgetItem(value)
-                if key == "status":
-                    if value == "Hoạt động":
-                        item.setForeground(QColor("#28a745"))
-                    elif value == "Không hoạt động":
-                        item.setForeground(QColor("#dc3545"))
-                    else:
-                        item.setForeground(QColor("#8a94a6"))
-                self.table.setItem(row, column, item)
+                self.table.setItem(row, column, QTableWidgetItem(value))
         self.stats_label.setText(f"{len(self.accounts)} accounts")
         self.update_dashboard()
         self.refresh_signup_accounts()
+        self.apply_filter()
 
     def update_dashboard(self):
         total = len(self.accounts)
@@ -2276,10 +2358,118 @@ class AccountManager(QMainWindow):
         }
         for key, label in self.stat_values.items():
             label.setText(str(counts[key]))
+        self.stats_chip.setText(
+            f'<span style="color:#28a745;font-weight:700;">{active} hoạt động</span>'
+            f'&nbsp;·&nbsp;<span style="color:#dc3545;font-weight:700;">{inactive} lỗi</span>'
+            f'&nbsp;·&nbsp;<span style="color:#8a94a6;font-weight:700;">{counts["unchecked"]} chưa kiểm tra</span>'
+        )
+
+    def on_header_clicked(self, column):
+        if column >= len(ACCOUNT_COLUMNS):
+            return
+        label, key = ACCOUNT_COLUMNS[column]
+        if key == "__password__":
+            return
+        if self.sort_key == key:
+            self.sort_asc = not self.sort_asc
+        else:
+            self.sort_key = key
+            self.sort_asc = True
+        self.accounts.sort(key=lambda acc: str(acc.get(key) or "").lower(),
+                           reverse=not self.sort_asc)
+        order = Qt.SortOrder.AscendingOrder if self.sort_asc else Qt.SortOrder.DescendingOrder
+        self.table.horizontalHeader().setSortIndicator(column, order)
+        self.table.horizontalHeader().setSortIndicatorShown(True)
+        self.update_table()
+        self.save_data()
+        self.log(f"Sắp xếp theo {label}: {'tăng dần' if self.sort_asc else 'giảm dần'}")
+
+    def build_column_menu(self):
+        menu = QMenu(self)
+        for label, key in ACCOUNT_COLUMNS[1:]:
+            action = QAction(label, menu)
+            action.setCheckable(True)
+            action.setChecked(key not in self.hidden_columns)
+            action.toggled.connect(lambda checked, column_key=key: self.set_column_hidden(column_key, not checked))
+            menu.addAction(action)
+        return menu
+
+    def set_column_hidden(self, key, hidden):
+        if hidden:
+            self.hidden_columns.add(key)
+        else:
+            self.hidden_columns.discard(key)
+        for column, (_, column_key) in enumerate(ACCOUNT_COLUMNS):
+            if column_key == key:
+                self.table.setColumnHidden(column, hidden)
+                break
+        self.ui_settings.setValue("hidden_account_columns",
+                                  json.dumps(sorted(self.hidden_columns), ensure_ascii=False))
+        self.ui_settings.sync()
+
+    def focus_search(self):
+        self.tab_widget.setCurrentWidget(self.list_tab)
+        self.search_input.setFocus()
+        self.search_input.selectAll()
+
+    def update_input_preview(self):
+        text = self.text_input.toPlainText().strip()
+        if not text:
+            self.input_preview.setText("")
+            return
+        existing = {acc["email"] for acc in self.accounts}
+        added = skipped = bad = 0
+        seen = set()
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            if "|" not in line:
+                bad += 1
+                continue
+            email, password = (part.strip() for part in line.split("|", 1))
+            if not email or not password:
+                bad += 1
+            elif email in existing or email in seen:
+                skipped += 1
+            else:
+                seen.add(email)
+                added += 1
+        self.input_preview.setText(
+            f"Sẽ thêm: {added} · Trùng: {skipped} · Sai định dạng: {bad}"
+        )
+
+    def eventFilter(self, obj, event):
+        if obj is self.text_input and event.type() in (QEvent.Type.DragEnter, QEvent.Type.Drop):
+            if not event.mimeData().hasUrls():
+                return super().eventFilter(obj, event)
+            if event.type() == QEvent.Type.DragEnter:
+                event.acceptProposedAction()
+                return True
+            for url in event.mimeData().urls():
+                path = url.toLocalFile()
+                if not path or not path.lower().endswith(".txt"):
+                    continue
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                except Exception as e:
+                    self.log(f"Không đọc được {path}: {e}")
+                    continue
+                current = self.text_input.toPlainText().strip()
+                self.text_input.setPlainText(f"{current}\n{content}" if current else content)
+                self.log(f"Đã kéo thả file: {path}")
+            event.acceptProposedAction()
+            return True
+        if hasattr(self, "table") and obj is self.table.viewport() and event.type() == QEvent.Type.Resize:
+            self.empty_label.setGeometry(obj.geometry())
+        return super().eventFilter(obj, event)
+
     def apply_filter(self):
         filter_text = self.filter_combo.currentText()
         search_text = self.search_input.text().lower()
         
+        visible = 0
         for i in range(self.table.rowCount()):
             email_item = self.table.item(i, 0)
             status_item = self.table.item(i, 2)
@@ -2304,6 +2494,20 @@ class AccountManager(QMainWindow):
                 show = False
             
             self.table.setRowHidden(i, not show)
+            if show:
+                visible += 1
+        
+        if not self.accounts:
+            self.empty_label.setText("Chưa có tài khoản nào.\n"
+                                     "Bấm \"Nhập tài khoản\" hoặc \"Import TXT\" để bắt đầu.")
+        elif visible == 0:
+            self.empty_label.setText("Không có tài khoản khớp bộ lọc.")
+        else:
+            self.empty_label.hide()
+            return
+        self.empty_label.setGeometry(self.table.viewport().geometry())
+        self.empty_label.show()
+        self.empty_label.raise_()
 
     def export_accounts(self):
         file_path, _ = QFileDialog.getSaveFileName(

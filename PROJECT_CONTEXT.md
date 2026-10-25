@@ -88,6 +88,21 @@ và đặt ở khung nhật ký bên phải bảng.
 - Bảng **không còn cột `#`**: số thứ tự do vertical header đảm nhiệm. Cột 0 là Email,
   cột 1 Password, cột 2 Status — `apply_filter()` đọc đúng các index này.
 - Cột `Password` luôn hiển thị `********`.
+- Danh sách cột là hằng số module `ACCOUNT_COLUMNS`. Nút **Cột hiển thị** (`column_button`)
+  mở menu checkable; cột ẩn lưu QSettings key `hidden_account_columns` (JSON) qua
+  `set_column_hidden()`. Email luôn hiển thị, không nằm trong menu.
+- Sắp xếp: `on_header_clicked()` **sắp lại chính `self.accounts`** rồi `update_table()` +
+  `save_data()` — index bảng luôn khớp list. Không dùng `setSortingEnabled()` vì sẽ phá
+  invariant index (context menu, xóa, double-click đều đọc `self.accounts[row]`).
+- Cột Status vẽ badge bo tròn bởi `StatusDelegate` (màu từ `STATUS_BADGE_COLORS`, nền tint
+  alpha 40 nên đúng cả theme sáng/tối); giá trị lạ fallback về vẽ mặc định.
+- Trạng thái rỗng: `empty_label` phủ giữa bảng khi chưa có tài khoản hoặc không dòng nào
+  khớp bộ lọc; geometry đồng bộ qua `eventFilter` bắt Resize của viewport.
+- Phím tắt: Ctrl+N mở dialog nhập, Ctrl+I import, Ctrl+F focus ô tìm kiếm,
+  Del xóa dòng chọn (context `WidgetShortcut` gắn trên bảng để không bắt phím khi gõ ô khác).
+- Toolbar: `stats_chip` rich-text "x hoạt động · y lỗi · z chưa kiểm tra" cạnh nhãn tổng số.
+- Dialog nhập: kéo thả file `.txt` vào ô nhập (eventFilter DragEnter/Drop, chỉ nhận `.txt`),
+  `update_input_preview()` đếm sẵn "Sẽ thêm / Trùng / Sai định dạng" theo `textChanged`.
 - Cột `Status` tô màu: `Hoạt động` → `#28a745`, `Không hoạt động` → `#dc3545`,
   `Chưa kiểm tra` → `#8a94a6`. Phải so sánh **chuỗi có dấu chính xác**
   (lỗi cũ từng so `"Hoat"` với `"Hoạt động"` nên không bao giờ tô màu).
