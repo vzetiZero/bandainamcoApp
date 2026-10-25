@@ -140,7 +140,7 @@ class AccountManager(QMainWindow):
         input_shortcut = QShortcut(QKeySequence("Ctrl+N"), self)
         input_shortcut.activated.connect(self.open_input_dialog)
         import_shortcut = QShortcut(QKeySequence("Ctrl+I"), self)
-        import_shortcut.activated.connect(self.import_from_txt)
+        import_shortcut.activated.connect(self.open_import_dialog)
         search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
         search_shortcut.activated.connect(self.focus_search)
         delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.table)
@@ -846,14 +846,6 @@ class AccountManager(QMainWindow):
         input_btn.clicked.connect(self.open_input_dialog)
         self.toolbar.addWidget(input_btn)
         
-        # Import Button
-        import_btn = QPushButton(" Import TXT")
-        import_btn.setObjectName("toolImport")
-        import_btn.setIcon(load_svg_icon(AppIcons.FOLDER_OPEN, 20, "#ffffff"))
-        import_btn.setToolTip("Nhập tài khoản từ file TXT")
-        import_btn.clicked.connect(self.import_from_txt)
-        self.toolbar.addWidget(import_btn)
-        
         # Check All Button
         check_btn = QPushButton(" Ki\u1ec3m tra t\u1ea5t c\u1ea3 t\u00e0i kho\u1ea3n")
         check_btn.setObjectName("toolCheckAll")
@@ -922,7 +914,8 @@ class AccountManager(QMainWindow):
         layout.addWidget(title)
         
         # Format hint
-        hint = QLabel("Định dạng: email|password, mỗi dòng 1 tài khoản · có thể kéo thả file .txt vào ô dưới")
+        hint = QLabel("Định dạng: email|password, mỗi dòng 1 tài khoản · dùng nút Import TXT "
+                      "hoặc kéo thả file .txt vào ô dưới")
         hint.setStyleSheet("color: #666; font-size: 12px;")
         layout.addWidget(hint)
         
@@ -959,6 +952,11 @@ class AccountManager(QMainWindow):
 
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
+
+        import_btn = compact_button("Import TXT", "actionImport", AppIcons.FOLDER_OPEN,
+                                   "Chọn file TXT và đổ nội dung vào ô nhập để xem trước")
+        import_btn.clicked.connect(self.load_txt_into_input)
+        btn_layout.addWidget(import_btn)
 
         add_btn = compact_button("Thêm", "actionAdd", AppIcons.PLUS,
                                 "Thêm các tài khoản trong ô nhập vào danh sách")
@@ -1241,30 +1239,27 @@ class AccountManager(QMainWindow):
         )
 
 
-    def import_from_txt(self):
+    def load_txt_into_input(self):
+        """Import TXT nằm trong panel nhập: đọc file rồi đổ vào ô để xem trước khi Thêm."""
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Chọn file TXT", "", "Text Files (*.txt);;All Files (*)"
+            self.input_dialog, "Chọn file TXT", "", "Text Files (*.txt);;All Files (*)"
         )
-        
         if not file_path:
             return
-        
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                result = self.account_service.add_lines(f.readlines())
-            added, skipped = result["added"], result["skipped"]
-            
-            self.log(f"Import: +{added} | Bỏ qua: {skipped}")
-            self.update_table()
-            self.save_data()
-            
-            QMessageBox.information(
-                self, "Import hoàn tất",
-                f"Đã thêm: {added} tài khoản\nBỏ qua (trùng): {skipped} tài khoản"
-            )
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Lỗi", f"Không thể đọc file: {e}")
+            with open(file_path, "r", encoding="utf-8") as handle:
+                content = handle.read()
+        except Exception as exc:
+            QMessageBox.critical(self.input_dialog, "Lỗi", f"Không thể đọc file: {exc}")
+            return
+        current = self.text_input.toPlainText().strip()
+        self.text_input.setPlainText(f"{current}\n{content}" if current else content)
+        self.log(f"Đã import file: {file_path}")
+
+    def open_import_dialog(self):
+        """Ctrl+I: mở panel nhập trước rồi chọn file để người dùng thấy nội dung vừa nạp."""
+        self.open_input_dialog()
+        self.load_txt_into_input()
 
     def delete_selected(self):
         """Nút Xóa đã chọn + phím Del: xóa trọn vùng đang chọn có hộp thoại xác nhận."""
@@ -1592,7 +1587,7 @@ class AccountManager(QMainWindow):
         
         if not self.accounts:
             self.empty_label.setText("Chưa có tài khoản nào.\n"
-                                     "Bấm \"Nhập tài khoản\" hoặc \"Import TXT\" để bắt đầu.")
+                                     "Bấm \"Nhập tài khoản\" để bắt đầu.")
         elif visible == 0:
             self.empty_label.setText("Không có tài khoản khớp bộ lọc.")
         else:

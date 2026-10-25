@@ -4,14 +4,14 @@ Windows desktop app for organizing BANDAI NAMCO ID / NAMCO Parks accounts.
 
 ## Features
 
-- Add accounts manually or import `email|password|token` lines from a text file (the trailing token is kept separately and is not part of the password).
+- Add accounts manually or import `email|password|token` lines from a text file — the **Import TXT** button lives inside the account input dialog (the trailing token is kept separately and is not part of the password).
 - Track limited-time campaign windows with dates parsed for real, a derived status column, a countdown, filters, and a warning when a campaign opens within 24 hours.
 - Check account credentials against the live login flow and report the server's real reason when a login is rejected.
 - Show profile fields, points, and membership flags in the account table after the Parks2 login handoff completes.
-- Open the account input panel from the toolbar button **Nhập tài khoản** (same row as Import TXT); the account list tab comes first and the activity log starts closed beside the account table — use the **Nhật ký** toolbar button to show or hide it, and **Xóa log** inside the panel to clear it.
+- Open the account input panel from the toolbar button **Nhập tài khoản**; the account list tab comes first and the activity log starts closed beside the account table — use the **Nhật ký** toolbar button to show or hide it, and **Xóa log** inside the panel to clear it.
 - A dashboard strip at the top of the account list tab shows total, active, inactive and unchecked account counts, refreshed together with the table.
 - Account table extras: hide/show columns (remembered between runs), click a header to sort, status drawn as colored badges, an empty-state message when no row matches the filter, and shortcuts Ctrl+N / Ctrl+I / Ctrl+F / Del.
-- The input dialog accepts a dragged .txt file and previews how many lines will be added, skipped as duplicates, or rejected before you press Thêm.
+- The input dialog has an **Import TXT** button and accepts a dragged .txt file; both load the file into the text box, which previews how many lines will be added, skipped as duplicates, or rejected before you press Thêm.
 - Right-click actions follow the selection: pick several rows (drag, Ctrl+click, Shift+click) and **Kiểm tra**, **Copy email** and **Xóa** apply to every selected account — the menu labels show the count. Deleting always asks for confirmation and lists the emails it is about to remove.
 - While accounts are being checked, each row shows its own progress: the Email cell fills with the accent colour up to that account's percentage and prints the number in the corner, so with several accounts running at once you can see which one is at which stage. The bar clears as soon as the result is written.
 - Batch checks run concurrently. The Settings tab has a **Kiểm tra đồng thời** spinner for the number of parallel threads (1–10, default **5**, remembered between runs).

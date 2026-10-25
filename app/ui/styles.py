@@ -73,20 +73,20 @@ def build_stylesheet(theme="light", accent="#d61718", font_size=9, compact=False
         QPushButton {{ background: #b8fff5; color: #102322; border: 1px solid #3ff2d7; padding: 8px 13px; border-radius: 6px; font-weight: 600; }}
         QPushButton:hover {{ background: #93f7e9; border-color: #20ccb7; color: #102322; }}
         QPushButton:pressed {{ background: #72ead8; }}
-        QPushButton#actionAdd, QPushButton#actionClear, QPushButton#actionCheck, QPushButton#actionExport {{ padding: 6px 12px; border-radius: 6px; font-weight: 700; border: none; color: white; }}
+        QPushButton#actionAdd, QPushButton#actionClear, QPushButton#actionCheck, QPushButton#actionExport, QPushButton#actionImport {{ padding: 6px 12px; border-radius: 6px; font-weight: 700; border: none; color: white; }}
         QPushButton#actionAdd {{ background: #d61718; }}
         QPushButton#actionAdd:hover {{ background: #b51515; }}
+        QPushButton#actionImport {{ background: #4a90d9; }}
+        QPushButton#actionImport:hover {{ background: #3a7bc8; }}
         QPushButton#actionClear {{ background: #6c757d; }}
         QPushButton#actionClear:hover {{ background: #5a6268; }}
         QPushButton#actionCheck {{ background: #28a745; }}
         QPushButton#actionCheck:hover {{ background: #218838; }}
         QPushButton#actionExport {{ background: #2864c5; }}
         QPushButton#actionExport:hover {{ background: #1f4fa8; }}
-        QPushButton#toolInput, QPushButton#toolImport, QPushButton#toolCheckAll, QPushButton#toolDelete {{ color: white; border: none; padding: 8px 16px; border-radius: 6px; font-weight: 700; }}
+        QPushButton#toolInput, QPushButton#toolCheckAll, QPushButton#toolDelete {{ color: white; border: none; padding: 8px 16px; border-radius: 6px; font-weight: 700; }}
         QPushButton#toolInput {{ background: {accent}; }}
         QPushButton#toolInput:hover {{ background: {accent_hover}; }}
-        QPushButton#toolImport {{ background: #4a90d9; }}
-        QPushButton#toolImport:hover {{ background: #3a7bc8; }}
         QPushButton#toolCheckAll {{ background: #28a745; }}
         QPushButton#toolCheckAll:hover {{ background: #218838; }}
         QPushButton#toolDelete {{ background: #dc3545; }}

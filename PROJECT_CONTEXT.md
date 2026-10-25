@@ -68,27 +68,33 @@ USER_AGENT    = "Mozilla/5.0 ... Chrome/120.0.0.0 Safari/537.36"
 
 ### 2.0 Toolbar — nút hành động
 
-4 nút hành động cùng cấp trên toolbar, style qua `objectName` trong `apply_styles()`:
+3 nút hành động cùng cấp trên toolbar, style qua `objectName` trong `apply_styles()`:
 
 | objectName | Nhãn | Handler |
 |---|---|---|
 | `toolInput` | Nhập tài khoản | `open_input_dialog()` — mở `self.input_dialog` |
-| `toolImport` | Import TXT | `import_from_txt` |
 | `toolCheckAll` | Kiểm tra tất cả tài khoản | `check_all_accounts` |
 | `toolDelete` | Xóa đã chọn | `delete_selected` |
+
+Import TXT **không còn là nút toolbar** — nó nằm trong panel nhập (xem 2.1).
 
 ### 2.1 Dialog Nhập tài khoản
 
 Panel nhập (`create_left_panel()`) không còn là tab — nó nằm trong `self.input_dialog`
 (`QDialog` không modal, giữ nguyên widget giữa các lần mở). Ô nhập `email|password`,
-4 nút compact trên một hàng, tất cả dùng `objectName` để style trong `apply_styles()`:
+5 nút compact trên một hàng, tất cả dùng `objectName` để style trong `apply_styles()`:
 
 | objectName | Nhãn | Icon | Handler | Tooltip |
 |---|---|---|---|---|
+| `actionImport` | Import TXT | `folder-open` | `load_txt_into_input` | Chọn file TXT và đổ nội dung vào ô nhập để xem trước |
 | `actionAdd` | Thêm | `plus` | `add_from_text` | Thêm các tài khoản trong ô nhập vào danh sách |
 | `actionClear` | Xóa | `x` | `text_input.clear` | Xóa toàn bộ nội dung ô nhập |
 | `actionCheck` | Kiểm tra đầu tiên | `check` | `check_first_account` | Kiểm tra tài khoản đầu tiên trong danh sách |
 | `actionExport` | Export | `download` | `export_accounts` | Export danh sách tài khoản ra file |
+
+`load_txt_into_input()` **nối** nội dung file vào ô nhập (giống kéo thả) rồi để người dùng
+bấm **Thêm**; nhờ vậy `update_input_preview()` đếm trước "Sẽ thêm / Trùng / Sai định dạng".
+Ctrl+I (`open_import_dialog`) mở panel nhập trước rồi mới mở hộp chọn file.
 
 **Quy ước bắt buộc:** muốn thêm nút mới thì đặt `objectName` và khai báo
 màu trong bảng QSS của `app/ui/styles.py::build_stylesheet()`. `apply_styles()` chỉ còn
@@ -134,8 +140,8 @@ và đặt ở khung nhật ký bên phải bảng.
   `setText()` trực tiếp, chỉ tạo + insert khi `item is None`.
 - Trạng thái rỗng: `empty_label` phủ giữa bảng khi chưa có tài khoản hoặc không dòng nào
   khớp bộ lọc; geometry đồng bộ qua `eventFilter` bắt Resize của viewport.
-- Phím tắt: Ctrl+N mở dialog nhập, Ctrl+I import, Ctrl+F focus ô tìm kiếm,
-  Del xóa dòng chọn (context `WidgetShortcut` gắn trên bảng để không bắt phím khi gõ ô khác).
+- Phím tắt: Ctrl+N mở dialog nhập, Ctrl+I mở dialog nhập rồi chọn file TXT, Ctrl+F focus ô
+  tìm kiếm, Del xóa dòng chọn (context `WidgetShortcut` gắn trên bảng để không bắt phím khi gõ ô khác).
 - Toolbar: `stats_chip` rich-text "x hoạt động · y lỗi · z chưa kiểm tra" cạnh nhãn tổng số.
 - Bảng nhật ký (`self.log_panel`, QFrame bên phải bảng) **mặc định đóng** để bảng tài khoản
   rộng tối đa; nút **Nhật ký** trên toolbar (checkable, `log_btn`) gọi
@@ -635,6 +641,7 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 | Context menu theo vùng chọn + confirm khi xóa | xem log | Kiểm tra/Copy/Xóa áp dụng cho **mọi** dòng đang chọn |
 | Fill tiến trình trong ô Email + kiểm tra đa luồng | xem log | `EmailProgressDelegate` + `PROGRESS_ROLE`; `BatchCheckWorker` dùng `ThreadPoolExecutor`, số luồng cấu hình được (mặc định 5) |
 | Panel nhật ký mặc định đóng, nút mở/đóng + Xóa log | xem log | `log_btn` checkable trên toolbar, `set_log_panel_visible()`, `clear_log()` |
+| Import TXT chuyển vào panel nhập tài khoản | xem log | `actionImport` → `load_txt_into_input()` đổ file vào ô nhập để xem trước; bỏ nút toolbar |
 | Trạng thái + lọc + cảnh báo chiến dịch | xem git log | Tính từ ngày, không nhập tay |
 | Đăng ký thủ công + ghi nhận tài khoản | xem git log | Mở link + clipboard, người dùng tự submit |
 | Proxy cho mọi request | `6ccd2d3` | + tab Cấu hình, kiểm tra proxy |
