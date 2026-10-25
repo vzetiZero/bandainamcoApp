@@ -128,7 +128,14 @@ và đặt ở khung nhật ký bên phải bảng.
   `Chưa kiểm tra` → `#8a94a6`. Phải so sánh **chuỗi có dấu chính xác**
   (lỗi cũ từng so `"Hoat"` với `"Hoạt động"` nên không bao giờ tô màu).
 - Lọc: `apply_filter()` theo status + tìm kiếm email (dùng `setRowHidden`).
-- Context menu chuột phải: Đổi tên / Xem thông tin / Kiểm tra / Copy email / Xóa.
+- Context menu chuột phải: `context_rows()` quyết định menu tác động lên đâu — bấm vào
+  **trong vùng đang chọn** thì giữ nguyên cả vùng (Kiểm tra / Copy / Xóa chạy cho **tất cả**
+  tài khoản đã chọn, nhãn menu ghi rõ số dòng), bấm ra ngoài vùng thì chỉ dòng vừa bấm.
+  "Đổi tên" và "Xem thông tin" về bản chất chỉ làm được với 1 tài khoản (một worker, một hộp
+  thoại) nên nhãn của chúng ghi kèm email mục tiêu để không nhầm là đã áp dụng cho cả vùng.
+- Xóa (menu chuột phải, nút toolbar và Del) luôn qua `confirm_and_delete()`: hộp thoại xác nhận
+  liệt kê tối đa 10 email ("… và N tài khoản nữa"), bấm No không xóa gì, bấm Yes xóa trọn
+  vùng và ghi xuống file.
 
 ### 2.3 Tab 3 — Chiến dịch (chi tiết ở mục 3)
 
@@ -488,6 +495,12 @@ tự tạo — truyền client giả là test được worker mà không cần m
 **Bẫy đã gặp:** `BatchCheckWorker` nối signal của `LoginWorker` con bằng
 `Qt.ConnectionType.DirectConnection` rồi gọi `run()` trực tiếp (không `start()`).
 Đừng đổi sang cách khác nếu chưa hiểu vì sao.
+
+**Worker phải được giữ tham chiếu:** mọi `worker.start()` đi qua `start_worker()` của view,
+thêm worker vào `self.workers` và tự gỡ khi thread phát `finished`. Trước đây worker chỉ nằm
+ở `self.worker` nên lần kiểm tra kế tiếp làm GC một `QThread` còn đang chạy — Qt abort
+("QThread: Destroyed while thread is still running"), và `closeEvent()` không dừng được gì
+vì `self.workers` luôn rỗng.
 
 `closeEvent()` gọi `stop()` cho worker đang chạy rồi `save_data()`.
 

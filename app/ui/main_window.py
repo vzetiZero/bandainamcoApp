@@ -1217,25 +1217,9 @@ class AccountManager(QMainWindow):
             QMessageBox.critical(self, "Lỗi", f"Không thể đọc file: {e}")
 
     def delete_selected(self):
-        selected_rows = set()
-        for item in self.table.selectedItems():
-            selected_rows.add(item.row())
-        
-        if not selected_rows:
-            QMessageBox.warning(self, "Cảnh báo", "Vui lòng chọn tài khoản cần xóa!")
-            return
-        
-        reply = QMessageBox.question(
-            self, "Xác nhận",
-            f"Bạn có chắc muốn xóa {len(selected_rows)} tài khoản đã chọn?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        
-        if reply == QMessageBox.Yes:
-            removed = self.account_service.delete_rows(selected_rows)
-            self.update_table()
-            self.save_data()
-            self.log(f"Đã xóa {removed} tài khoản")
+        """Nút Xóa đã chọn + phím Del: xóa trọn vùng đang chọn có hộp thoại xác nhận."""
+        rows = sorted({item.row() for item in self.table.selectedItems()})
+        self.confirm_and_delete(rows)
 
     # ============================================================
     # CHECK ACCOUNTS
@@ -1244,23 +1228,36 @@ class AccountManager(QMainWindow):
         if not self.accounts:
             QMessageBox.warning(self, "Cảnh báo", "Không có tài khoản nào!")
             return
-        
+
+        self.run_batch_check([(acc['email'], acc['password']) for acc in self.accounts],
+                             "tất cả tài khoản")
+
+    def check_rows(self, rows):
+        """Menu chuột phải: kiểm tra mọi tài khoản trong vùng đã chọn, không chỉ dòng đầu."""
+        rows = [row for row in rows if 0 <= row < len(self.accounts)]
+        if not rows:
+            return
+        if len(rows) == 1:
+            self.check_single_account(rows[0])
+            return
+        targets = [(self.accounts[row]['email'], self.accounts[row]['password'])
+                   for row in rows]
+        self.run_batch_check(targets, f"{len(targets)} tài khoản đã chọn")
+
+    def run_batch_check(self, targets, label):
+        """Chạy BatchCheckWorker cho một danh sách (email, password) bất kỳ."""
         self.progress_bar.setVisible(True)
-        self.progress_bar.setMaximum(len(self.accounts))
+        self.progress_bar.setMaximum(len(targets))
         self.progress_bar.setValue(0)
-        
-        # Chuẩn bị danh sách
-        accounts_to_check = [(acc['email'], acc['password']) for acc in self.accounts]
-        
-        # Tạo worker
-        self.worker = BatchCheckWorker(accounts_to_check, self.auth_client)
-        self.worker.result_ready.connect(self.on_check_result)
-        self.worker.profile_ready.connect(self.on_profile_ready)
-        self.worker.progress.connect(self.on_check_progress)
-        self.worker.finished_checking.connect(self.on_check_finished)
-        self.worker.start()
-        
-        self.log(f"Bắt đầu kiểm tra {len(accounts_to_check)} tài khoản...")
+
+        worker = BatchCheckWorker(targets, self.auth_client)
+        worker.result_ready.connect(self.on_check_result)
+        worker.profile_ready.connect(self.on_profile_ready)
+        worker.progress.connect(self.on_check_progress)
+        worker.finished_checking.connect(self.on_check_finished)
+        self.start_worker(worker)
+
+        self.log(f"Bắt đầu kiểm tra {label} ({len(targets)})...")
 
     def check_first_account(self):
         if not self.accounts:
@@ -1278,11 +1275,11 @@ class AccountManager(QMainWindow):
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
         
-        self.worker = LoginWorker(acc['email'], acc['password'], self.auth_client)
-        self.worker.result_ready.connect(lambda email, success, msg: self.on_single_result(index, email, success, msg))
-        self.worker.profile_ready.connect(self.on_profile_ready)
-        self.worker.progress.connect(self.progress_bar.setValue)
-        self.worker.start()
+        worker = LoginWorker(acc['email'], acc['password'], self.auth_client)
+        worker.result_ready.connect(lambda email, success, msg: self.on_single_result(index, email, success, msg))
+        worker.profile_ready.connect(self.on_profile_ready)
+        worker.progress.connect(self.progress_bar.setValue)
+        self.start_worker(worker)
         
         self.log(f"Đang kiểm tra: {acc['email']}")
 
@@ -1335,7 +1332,8 @@ class AccountManager(QMainWindow):
         self.progress_bar.setVisible(False)
         self.status_bar.showMessage("Hoàn tất kiểm tra")
         self.save_data()
-        self.log("Hoàn tất kiểm tra tất cả tài khoản")
+        self.update_table()
+        self.log("Hoàn tất kiểm tra")
 
     # ============================================================
     # UI UPDATES
@@ -1521,69 +1519,117 @@ class AccountManager(QMainWindow):
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_text.append(f"[{timestamp}] {message}")
 
+    def start_worker(self, worker):
+        """
+        Giữ tham chiếu tới worker đang chạy.
+
+        Không có danh sách này thì lần kiểm tra tiếp theo làm GC một `QThread` còn đang
+        chạy và Qt abort; `closeEvent()` cũng dựa vào `self.workers` để dừng worker khi
+        đóng cửa sổ.
+        """
+        self.workers.append(worker)
+        worker.finished.connect(lambda w=worker: self.forget_worker(w))
+        worker.start()
+
+    def forget_worker(self, worker):
+        if worker in self.workers:
+            self.workers.remove(worker)
+
     # ============================================================
     # CONTEXT MENU
     # ============================================================
+    def context_rows(self, position):
+        """
+        Những dòng mà menu chuột phải sẽ tác động.
+
+        Bấm chuột phải vào trong vùng đang chọn thì giữ nguyên cả vùng (thao tác
+        áp dụng cho mọi tài khoản đã chọn); bấm ra ngoài vùng thì chỉ dòng đó.
+        """
+        clicked = self.table.rowAt(position.y())
+        if clicked < 0 or clicked >= len(self.accounts):
+            return []
+        selected = sorted({item.row() for item in self.table.selectedItems()
+                           if 0 <= item.row() < len(self.accounts)})
+        if clicked in selected and len(selected) > 1:
+            return selected
+        return [clicked]
+
     def show_context_menu(self, position):
         """Hiển thị context menu khi chuột phải vào bảng"""
-        menu = QMenu(self)
-        
-        # Lấy dòng được chọn
-        row = self.table.rowAt(position.y())
-        if row < 0 or row >= len(self.accounts):
+        rows = self.context_rows(position)
+        if not rows:
             return
-        
-        # Các hành động
-        change_name_action = QAction(load_svg_icon(AppIcons.EDIT), " Đổi tên", self)
-        change_name_action.triggered.connect(lambda: self.change_account_name(row))
+
+        menu = QMenu(self)
+        many = len(rows) > 1
+        # Hành động chỉ làm được với 1 tài khoản (một worker / một hộp thoại) nói rõ
+        # target ngay trên nhãn để không nhầm là đã áp dụng cho cả vùng chọn.
+        target_email = self.accounts[rows[0]]['email']
+
+        change_name_action = QAction(load_svg_icon(AppIcons.EDIT),
+                                     f" Đổi tên{' ' + target_email if many else ''}", self)
+        change_name_action.triggered.connect(lambda: self.change_account_name(rows[0]))
         menu.addAction(change_name_action)
 
-        details_action = QAction("Xem thông tin tài khoản", self)
-        details_action.triggered.connect(lambda: self.show_account_details(row))
+        details_action = QAction(f"Xem thông tin tài khoản{' ' + target_email if many else ''}", self)
+        details_action.triggered.connect(lambda: self.show_account_details(rows[0]))
         menu.addAction(details_action)
-        
+
         menu.addSeparator()
-        
-        check_action = QAction(load_svg_icon(AppIcons.CHECK), " Kiểm tra tài khoản", self)
-        check_action.triggered.connect(lambda: self.check_single_account(row))
+
+        check_label = f" Kiểm tra {len(rows)} tài khoản đã chọn" if many else " Kiểm tra tài khoản"
+        check_action = QAction(load_svg_icon(AppIcons.CHECK), check_label, self)
+        check_action.triggered.connect(lambda: self.check_rows(rows))
         menu.addAction(check_action)
-        
-        copy_email_action = QAction(load_svg_icon(AppIcons.COPY), " Copy email", self)
-        copy_email_action.triggered.connect(lambda: self.copy_email(row))
+
+        copy_label = f" Copy {len(rows)} email" if many else " Copy email"
+        copy_email_action = QAction(load_svg_icon(AppIcons.COPY), copy_label, self)
+        copy_email_action.triggered.connect(lambda: self.copy_emails(rows))
         menu.addAction(copy_email_action)
-        
+
         menu.addSeparator()
-        
-        delete_action = QAction(load_svg_icon(AppIcons.TRASH), " Xóa tài khoản", self)
-        delete_action.triggered.connect(lambda: self.delete_single_account(row))
+
+        delete_label = f" Xóa {len(rows)} tài khoản đã chọn" if many else " Xóa tài khoản"
+        delete_action = QAction(load_svg_icon(AppIcons.TRASH), delete_label, self)
+        delete_action.triggered.connect(lambda: self.confirm_and_delete(rows))
         menu.addAction(delete_action)
-        
+
         menu.exec(self.table.viewport().mapToGlobal(position))
 
-    def copy_email(self, row):
-        """Copy email vào clipboard"""
-        if row < len(self.accounts):
-            email = self.accounts[row]['email']
-            QApplication.clipboard().setText(email)
-            self.log(f"Đã copy email: {email}")
-
-    def delete_single_account(self, row):
-        """Xóa một tài khoản"""
-        if row >= len(self.accounts):
+    def copy_emails(self, rows):
+        """Copy email của một hoặc nhiều tài khoản đã chọn, mỗi email một dòng."""
+        emails = [self.accounts[row]['email'] for row in rows if row < len(self.accounts)]
+        if not emails:
             return
-        
-        email = self.accounts[row]['email']
+        QApplication.clipboard().setText("\n".join(emails))
+        if len(emails) == 1:
+            self.log(f"Đã copy email: {emails[0]}")
+        else:
+            self.log(f"Đã copy {len(emails)} email đã chọn")
+
+    def confirm_and_delete(self, rows):
+        """Hỏi xác nhận kèm danh sách email rồi xóa trọn vùng đã chọn."""
+        rows = sorted({row for row in rows if 0 <= row < len(self.accounts)})
+        if not rows:
+            QMessageBox.warning(self, "Cảnh báo", "Vui lòng chọn tài khoản cần xóa!")
+            return
+
+        emails = [self.accounts[row]['email'] for row in rows]
+        listing = "\n".join(emails[:10])
+        if len(emails) > 10:
+            listing += f"\n… và {len(emails) - 10} tài khoản nữa"
         reply = QMessageBox.question(
-            self, "Xác nhận",
-            f"Bạn có chắc muốn xóa tài khoản {email}?",
+            self, "Xác nhận xóa",
+            f"Bạn có chắc muốn xóa {len(emails)} tài khoản?\n\n{listing}",
             QMessageBox.Yes | QMessageBox.No
         )
-        
-        if reply == QMessageBox.Yes:
-            self.account_service.delete_rows([row])
-            self.update_table()
-            self.save_data()
-            self.log(f"Đã xóa: {email}")
+        if reply != QMessageBox.Yes:
+            return
+
+        removed = self.account_service.delete_rows(rows)
+        self.update_table()
+        self.save_data()
+        self.log(f"Đã xóa {removed} tài khoản")
 
     # ============================================================
     # CHANGE NAME
@@ -1630,10 +1676,10 @@ class AccountManager(QMainWindow):
         self.progress_bar.setValue(0)
         
         self.pending_name_changes[acc['email']] = dict(name_data)
-        self.worker = ChangeNameWorker(acc['email'], acc['password'], name_data, self.name_client)
-        self.worker.result_ready.connect(lambda email, success, msg: self.on_change_name_result(row, email, success, msg))
-        self.worker.progress.connect(self.progress_bar.setValue)
-        self.worker.start()
+        worker = ChangeNameWorker(acc['email'], acc['password'], name_data, self.name_client)
+        worker.result_ready.connect(lambda email, success, msg: self.on_change_name_result(row, email, success, msg))
+        worker.progress.connect(self.progress_bar.setValue)
+        self.start_worker(worker)
         
         self.log(f'\u0110ang c\u1eadp nh\u1eadt h\u1ed3 s\u01a1: {acc["email"]}')
 

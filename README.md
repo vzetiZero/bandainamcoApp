@@ -12,6 +12,7 @@ Windows desktop app for organizing BANDAI NAMCO ID / NAMCO Parks accounts.
 - A dashboard strip at the top of the account list tab shows total, active, inactive and unchecked account counts, refreshed together with the table.
 - Account table extras: hide/show columns (remembered between runs), click a header to sort, status drawn as colored badges, an empty-state message when no row matches the filter, and shortcuts Ctrl+N / Ctrl+I / Ctrl+F / Del.
 - The input dialog accepts a dragged .txt file and previews how many lines will be added, skipped as duplicates, or rejected before you press Thêm.
+- Right-click actions follow the selection: pick several rows (drag, Ctrl+click, Shift+click) and **Kiểm tra**, **Copy email** and **Xóa** apply to every selected account — the menu labels show the count. Deleting always asks for confirmation and lists the emails it is about to remove.
 - Edit the two Kanji name fields (`last_name_kanji`, `first_name_kanji`) in the profile dialog; the rest of the profile is read-only.
 - Send every request (login, check, name change) through proxies read from `proxy.txt`, configured in the Settings tab.
 
