@@ -12,6 +12,7 @@ import requests
 from app.config import (
     ACCOUNT_COOKIE_DOMAIN, API_URL, CLIENT_ID, ENV_INFO, LOGIN_URL, REDIRECT_URI,
 )
+from app.domain.ip_rules import IPLockoutError, is_ip_lockout
 from app.domain.login_rules import describe_login_error
 from app.infrastructure.bandai_profile import (
     REQUEST_TIMEOUT, HandoffResult, complete_parks2_handoff, fetch_member_profile,
@@ -46,6 +47,12 @@ def parse_json(response):
         return {"result": "NG", "data": {"msg": "Phản hồi không phải JSON"}}
 
 
+# Số lần chạy lại toàn bộ luồng khi IP bị site chặn. Mỗi lần là một session mới
+# (cookie mới, proxy khác); từng request đã tự thử PROXY_ATTEMPTS proxy trong
+# proxy_manager nên không cần con số lớn.
+IP_LOCKOUT_ATTEMPTS = 2
+
+
 class BandaiAuthClient:
     """Thay mặt người dùng nói chuyện với account-api; mọi request đi qua session_factory."""
 
@@ -56,9 +63,31 @@ class BandaiAuthClient:
 
     def login(self, email: str, password: str,
               on_progress: Optional[Callable[[int], None]] = None):
-        """Xác thực và trả (session, reason). session is None khi server từ chối credentials."""
-        report = on_progress or (lambda percent: None)
+        """Xác thực và trả (session, reason). session is None khi server từ chối credentials.
+
+        Khi site chặn IP (`UnexpectedRemoteAddress`), proxy vừa dùng đã được đánh dấu
+        nghỉ nên lần chạy lại nhận session với proxy khác; cookie cũng được làm mới.
+        """
+        last_error = ""
+        for _ in range(IP_LOCKOUT_ATTEMPTS):
+            try:
+                return self._login_once(email, password, on_progress)
+            except IPLockoutError as exc:
+                last_error = str(exc)
+        return None, last_error
+
+    def _login_once(self, email: str, password: str,
+                    on_progress: Optional[Callable[[int], None]] = None):
         session = self._session_factory()
+        try:
+            return self._login_flow(session, email, password, on_progress)
+        except IPLockoutError:
+            session.close()
+            raise
+
+    def _login_flow(self, session, email: str, password: str,
+                    on_progress: Optional[Callable[[int], None]] = None):
+        report = on_progress or (lambda percent: None)
         headers = request_headers()
 
         report(10)
@@ -92,6 +121,10 @@ class BandaiAuthClient:
         apply_response_cookies(session, login_payload)
 
         report(70)
+        # Lỗi chặn IP có thể nằm trong data.msg (HTTP 200), ngoài body đã được
+        # ProxySession kiểm tra. Đổi proxy và chạy lại luồng thay vì báo sai tài khoản.
+        if is_ip_lockout(login_payload) and getattr(session, "proxy_label", ""):
+            raise IPLockoutError(proxy=session.proxy_label)
         reason = describe_login_error(login_payload)
         if reason:
             return None, reason
@@ -101,20 +134,35 @@ class BandaiAuthClient:
     def authenticate(self, email: str, password: str,
                      on_progress: Optional[Callable[[int], None]] = None) -> LoginOutcome:
         """Đăng nhập rồi nối tiếp sang Parks2 và đọc hồ sơ thành viên."""
+        last_error = ""
+        for _ in range(IP_LOCKOUT_ATTEMPTS):
+            try:
+                return self._authenticate_once(email, password, on_progress)
+            except IPLockoutError as exc:
+                last_error = str(exc)
+        return LoginOutcome(success=False, reason=last_error)
+
+    def _authenticate_once(self, email: str, password: str,
+                           on_progress: Optional[Callable[[int], None]] = None) -> LoginOutcome:
         report = on_progress or (lambda percent: None)
-        auth, reason = self.login(email, password, report)
+        auth, reason = self._login_once(email, password, report)
         if auth is None:
             return LoginOutcome(success=False, reason=reason)
 
-        handoff = complete_parks2_handoff(auth.session, auth.headers, auth.redirect,
-                                          auth.language, self._timeout)
-        profile = {"email": email, "password": password}
-        if handoff.gender_code:
-            profile["gender_code"] = handoff.gender_code
+        try:
+            handoff = complete_parks2_handoff(auth.session, auth.headers, auth.redirect,
+                                              auth.language, self._timeout)
+            profile = {"email": email, "password": password}
+            if handoff.gender_code:
+                profile["gender_code"] = handoff.gender_code
 
-        report(85)
-        # Handoff fail không đồng nghĩa Parks2 không dùng được: luôn thử đọc mypage.
-        member_profile = fetch_member_profile(auth.session, auth.headers, self._timeout)
+            report(85)
+            # Handoff fail không đồng nghĩa Parks2 không dùng được: luôn thử đọc mypage.
+            member_profile = fetch_member_profile(auth.session, auth.headers, self._timeout)
+        except IPLockoutError:
+            auth.session.close()
+            raise
+
         if member_profile:
             profile.update(member_profile)
             profile["profile_fetch_status"] = "Profile loaded from Parks2"

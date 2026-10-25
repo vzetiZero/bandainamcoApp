@@ -5,6 +5,8 @@
 import re
 from html import unescape
 
+from app.domain.ip_rules import IP_LOCKOUT_REASON, is_ip_lockout
+
 
 # Site trả lời bằng tiếng Nhật; dịch sẵn các lỗi thường gặp để log dễ đọc.
 LOGIN_ERROR_TRANSLATIONS = [
@@ -24,6 +26,8 @@ def describe_login_error(payload):
     if payload.get("result") != "OK":
         data = payload.get("data")
         message = data.get("msg") if isinstance(data, dict) else None
+        if is_ip_lockout(payload):
+            return IP_LOCKOUT_REASON
         return str(message or "Server từ chối yêu cầu đăng nhập")
     error_map = (payload.get("input_error") or {}).get("error_msg")
     if isinstance(error_map, dict) and error_map:

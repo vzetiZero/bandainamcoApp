@@ -288,8 +288,10 @@ class AccountManager(QMainWindow):
         proxy_layout = QVBoxLayout(proxy_group)
 
         explanation = QLabel(
-            "M\u1ed7i request (\u0111\u0103ng nh\u1eadp, ki\u1ec3m tra t\u00e0i kho\u1ea3n, \u0111\u1ed5i t\u00ean) s\u1ebd d\u00f9ng proxy l\u1ea5y t\u1eeb file "
-            "proxy.txt theo \u0111\u1ecbnh d\u1ea1ng ip:port:username:pass. Khi t\u1ebft proxy, request \u0111i th\u1eb3ng nh\u01b0 tr\u01b0\u1edbc."
+            "Mỗi request (đăng nhập, kiểm tra tài khoản, đổi tên) sẽ dùng proxy lấy từ file "
+            "proxy.txt theo định dạng ip:port:username:pass. Khi tắt proxy, request đi thẳng "
+            "như trước. Nếu site báo chặn IP (UnexpectedRemoteAddress), app tự đổi sang proxy "
+            "khác và gửi lại request."
         )
         explanation.setWordWrap(True)
         proxy_layout.addWidget(explanation)

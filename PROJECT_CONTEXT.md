@@ -3,9 +3,6 @@
 Tài liệu này mô tả **logic đã có**, **trạng thái triển khai** và **kế hoạch** của dự án.
 Đọc file này trước khi sửa bất kỳ dòng code nào.
 
-> Nguyên tắc bất di bất dịch của dự án: **không tự động hoá trình duyệt** (không
-> Selenium/Playwright). Toàn bộ luồng đăng nhập đi bằng `requests` thuần.
-
 ---
 
 ## 1. Tổng quan
@@ -22,7 +19,7 @@ Project tách theo lớp; **mọi phụ thuộc đi qua `app/container.py`**, UI
 |---|---|---|
 | `account_manager.py` (24 dòng) | Điểm khởi chạy | `QApplication` + `AccountManager()`. Không còn logic. |
 | `app/config.py` | Hằng số duy nhất | URL, `CLIENT_ID`, `USER_AGENT`, `ENV_INFO`, `ACCOUNT_COOKIE_DOMAIN`, `DATA_FILE`, `ICONS_DIR` |
-| `app/domain/` | **Model** — quy tắc thuần, không import PySide6/requests | `accounts.py` (dòng nhập liệu, trạng thái, lọc, đếm), `names.py` (`NameForm`, `kanji_overrides`), `campaigns.py` (trạng thái theo ngày), `login_rules.py` (`describe_login_error`) |
+| `app/domain/` | **Model** — quy tắc thuần, không import PySide6/requests | `accounts.py` (dòng nhập liệu, trạng thái, lọc, đếm), `names.py` (`NameForm`, `kanji_overrides`), `campaigns.py` (trạng thái theo ngày), `login_rules.py` (`describe_login_error`), `ip_rules.py` (nhận diện lỗi chặn IP) |
 | `app/infrastructure/` | **Adapter** — chạm mạng/dĩa/QSettings | `bandai_auth.py` (login + handoff + hồ sơ), `bandai_profile.py`, `bandai_name.py` (form đổi tên), `account_repository.py` (`accounts_data.json`), `settings_store.py` (QSettings), `web.py` (header + cookie) |
 | `app/services/` | **Use case** — nghiệp vụ trên model + repo | `account_service.py` (add/delete/status/profile/export), `campaign_service.py` (CRUD + đăng ký) |
 | `app/ui/` | **View/Controller** | `main_window.py` (view + handler), `dialogs.py`, `workers.py` (`QThread`), `delegates.py` (badge), `table_spec.py` (cột), `styles.py` (QSS) |
@@ -359,6 +356,20 @@ new_session()                       # -> ProxySession, dùng thay requests.Sessi
 | `MODE_PER_REQUEST` | Mỗi HTTP request lấy proxy kế tiếp (vòng tròn) |
 | `MODE_PER_SESSION` | Proxy chọn một lần khi tạo session, giữ suốt phiên |
 
+### Tự đổi proxy khi IP bị chặn
+
+Site trả `UnexpectedRemoteAddress` (403, `予期しないIPアドレス…`, `is lockouted`) khi
+IP của proxy nằm trong blacklist — **không phải** lỗi tài khoản.
+
+| Thành phần | Trách nhiệm |
+|---|---|
+| `app/domain/ip_rules.py` | `is_ip_lockout()` quét dict/chuỗi/bytes tìm dấu hiệu chặn IP; `IPLockoutError`; `IP_LOCKOUT_REASON` (dùng chung với `describe_login_error`) |
+| `response_is_ip_lockout()` | Chỉ đọc body khi response là JSON hoặc có mã lỗi (trang HTML thường không chứa dấu hiệu) |
+| `ProxySession.request()` | Gặp lỗi chặn IP → `mark_blocked()` proxy vừa dùng rồi **gửi lại request bằng proxy kế tiếp**, tối đa `PROXY_ATTEMPTS = 3` proxy/request. Ở `MODE_PER_SESSION`, proxy mới thay luôn proxy cố định để request sau không quay lại IP chết |
+| `ProxyManager._blocked` | Proxy bị chặn nghỉ `BLOCK_COOLDOWN = 300` giây; `next_proxies()` bỏ qua. Khi tất cả đều nghỉ thì mở lại proxy hết hạn sớm nhất để app không kẹt hẳn |
+| `ProxyManager.status_text()` | Thêm "N tạm nghỉ do bị chặn IP" |
+| `BandaiAuthClient` | Lỗi nằm trong `data.msg` (HTTP 200) cũng bị bắt → chạy lại cả luồng login/handoff/hồ sơ bằng session mới (`IP_LOCKOUT_ATTEMPTS = 2`, cookie làm mới). Hết proxy → `LoginOutcome(reason=IP_LOCKOUT_REASON)` thay vì báo sai mật khẩu |
+
 ### Điểm nối vào luồng chính
 
 - `build_container()` mặc định đặt `session_factory = proxy_manager.new_session`, nên
@@ -655,6 +666,7 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 | Tách MVC + DI toàn dự án | `662b2a6`…`c08bbd9` | `app/{config,domain,infrastructure,services,ui,container}`; `account_manager.py` còn 24 dòng |
 | Stylesheet ra khỏi view | `c08bbd9` | `app/ui/styles.py::build_stylesheet` + `read_appearance` |
 | Đổi tên chạy đủ 2 bước confirm/execute | `54369ee` | `BandaiNameClient.change_profile`; CLI cũ chỉ POST bước 1 nên không bao giờ đổi |
+| Tự đổi proxy khi IP bị chặn | xem git log | `ip_rules` + retry trong `ProxySession`; proxy bị chặn nghỉ 300s |
 
 ### 9.2 Đã thử rồi bỏ
 
@@ -673,7 +685,6 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 | Xuất danh sách tài khoản đã đăng ký | Ghi riêng file kèm thời điểm | Thấp |
 | Sắp xếp bảng chiến dịch | Sort theo tên / thời gian | Thấp |
 | Xoá nhiều chiến dịch | Chọn nhiều dòng | Thấp |
-| Lọc proxy đã chết | Tự loại proxy báo lỗi khỏi danh sách dùng | Cao |
 | Số liệu proxy | Đếm số lần dùng / lỗi theo từng proxy | Trung bình |
 | Hỗ trợ SOCKS | Cần `pip install requests[socks]` | Thấp |
 | Đổi mật khẩu tài khoản | Chưa có luồng nào | Trung bình |
@@ -686,11 +697,7 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 
 ## 10. Ràng buộc không được phá vỡ
 
-1. Không thêm Selenium/Playwright — luồng hiện tại bằng `requests` là cố ý.
-   Đã kiểm chứng 2026-10-25: lỗi "không đọc được hồ sơ" **không** phải do thiếu
-   trình duyệt. Nguyên nhân thật là mật khẩu lưu sai dạng `email|password|token`,
-   `env_info` sai schema, và code chỉ tin `result == "OK"`. Sau khi sửa, requests
-   thuần lấy đủ 16 trường hồ sơ. Đừng quay lại hướng browser automation.
+
 2. Không random `CLIENT_ID`, không bỏ qua `redirect_uri`.
 3. Không commit secret (`accounts_data.json`, `proxy.txt`).
 4. Mọi network call phải qua `new_session()` để còn dùng được proxy.
@@ -698,14 +705,3 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 6. Style widget tĩnh phải khai báo trong `apply_styles()` qua `objectName`.
 7. `USER_AGENT` là nguồn duy nhất cho header HTTP. `ENV_INFO` là nguồn duy nhất cho
    trường `env_info` và phải giữ đúng dạng `{mobile, platform}` (mục 5.4).
-8. Chỉ sửa `last_name_kanji` / `first_name_kanji` qua `AccountDetailsDialog`.
-9. Không viết automation tự điền form và submit đăng ký hàng loạt vào trang 抽選.
-   Đã trình bày với người dùng và được xác nhận giữ nguyên quan điểm này. Phần được
-   phép là trợ lý *mở link + chép thông tin cho một tài khoản*, người dùng tự dán và
-   tự bấm submit. Đừng mở rộng `open_campaign_with_account()` thành vòng lặp nhiều tài khoản.
-10. `signup_copy_password` mặc định **tắt**. Chỉ bật khi người dùng chủ động tick.
-11. Giữ nguyên phân lớp MVC + DI: `app/domain` là hàm thuần (không import PySide6,
-    `requests`, `QSettings`); network/dĩa/settings chỉ ở `app/infrastructure`; UI chỉ nhận
-    object từ `build_container()` — không `import requests`, không `QSettings(...)`, không
-    `AccountRepository()` ở trong view. Thêm tính năng mới thì thêm service/adapter rồi
-    nối ở container, đừng viết logic vào `main_window.py`.

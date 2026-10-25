@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlparse
 import requests
 
 from app.config import API_URL, CLIENT_ID, PARKS2_DOMAIN, PARKS2_HOST, REDIRECT_URI
+from app.domain.ip_rules import IPLockoutError, is_ip_lockout
 from app.infrastructure.web import apply_response_cookies, cookie_payload
 
 REQUEST_TIMEOUT = 30
@@ -184,6 +185,8 @@ def complete_parks2_handoff(session, headers, redirect_url, language, timeout=RE
         data = response.json()
     except (requests.RequestException, ValueError):
         return HandoffResult(status="Could not complete the Parks2 login handoff")
+    if is_ip_lockout(data):
+        raise IPLockoutError(proxy=getattr(session, "proxy_label", ""))
     if data.get("result") != "OK":
         return HandoffResult(status="Could not complete the Parks2 login handoff")
     apply_response_cookies(session, data)
