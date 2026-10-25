@@ -9,6 +9,7 @@ Windows desktop app for organizing BANDAI NAMCO ID / NAMCO Parks accounts.
 - Check account credentials and save the latest check time.
 - Show profile fields, points, and membership flags in the account table after the Parks2 login handoff completes.
 - Open the account input panel from the toolbar button **Nhập tài khoản** (same row as Import TXT); the account list tab comes first and the activity log appears beside the account table.
+- A dashboard strip at the top of the account list tab shows total, active, inactive and unchecked account counts, refreshed together with the table.
 - Edit only `first_name_kanji` through the profile dialog.
 - Send every request (login, check, name change) through proxies read from `proxy.txt`, configured in the Settings tab.
 

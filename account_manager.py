@@ -1702,6 +1702,29 @@ class AccountManager(QMainWindow):
         title.setStyleSheet("font-size: 16px; font-weight: bold; color: #333;")
         layout.addWidget(title)
         
+        # Dashboard thống kê nhanh
+        self.stat_values = {}
+        dashboard = QHBoxLayout()
+        dashboard.setSpacing(10)
+        for key, caption in (("total", "Tổng tài khoản"), ("active", "Hoạt động"),
+                             ("inactive", "Không hoạt động"), ("unchecked", "Chưa kiểm tra")):
+            card = QFrame()
+            card.setObjectName("statCard")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(12, 8, 12, 8)
+            card_layout.setSpacing(2)
+            value = QLabel("0")
+            value.setObjectName("statValue" + key.capitalize())
+            value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            card_layout.addWidget(value)
+            caption_label = QLabel(caption)
+            caption_label.setObjectName("statCaption")
+            caption_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            card_layout.addWidget(caption_label)
+            dashboard.addWidget(card, 1)
+            self.stat_values[key] = value
+        layout.addLayout(dashboard)
+        
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
@@ -1815,6 +1838,13 @@ class AccountManager(QMainWindow):
             QTabBar::tab {{ background: {surface}; color: {muted}; padding: 10px 18px; margin-right: 4px; border: 1px solid {border}; border-bottom: 0; border-top-left-radius: 7px; border-top-right-radius: 7px; }}
             QTabBar::tab:selected {{ color: {accent}; font-weight: 700; background: {bg}; }}
             QFrame {{ background: {surface}; border: 1px solid {border}; border-radius: 8px; }}
+            QFrame#statCard {{ background: {alternate}; }}
+            QLabel#statCaption {{ background: transparent; color: {muted}; font-size: 8pt; font-weight: 600; }}
+            QLabel#statValueTotal, QLabel#statValueActive, QLabel#statValueInactive, QLabel#statValueUnchecked {{ background: transparent; font-size: 16pt; font-weight: 800; }}
+            QLabel#statValueTotal {{ color: {accent}; }}
+            QLabel#statValueActive {{ color: #28a745; }}
+            QLabel#statValueInactive {{ color: #dc3545; }}
+            QLabel#statValueUnchecked {{ color: {muted}; }}
             QPushButton {{ background: #b8fff5; color: #102322; border: 1px solid #3ff2d7; padding: 8px 13px; border-radius: 6px; font-weight: 600; }}
             QPushButton:hover {{ background: #93f7e9; border-color: #20ccb7; color: #102322; }}
             QPushButton:pressed {{ background: #72ead8; }}
@@ -2231,7 +2261,21 @@ class AccountManager(QMainWindow):
                         item.setForeground(QColor("#8a94a6"))
                 self.table.setItem(row, column, item)
         self.stats_label.setText(f"{len(self.accounts)} accounts")
+        self.update_dashboard()
         self.refresh_signup_accounts()
+
+    def update_dashboard(self):
+        total = len(self.accounts)
+        active = sum(1 for acc in self.accounts if acc.get("status") == "Hoạt động")
+        inactive = sum(1 for acc in self.accounts if acc.get("status") == "Không hoạt động")
+        counts = {
+            "total": total,
+            "active": active,
+            "inactive": inactive,
+            "unchecked": total - active - inactive,
+        }
+        for key, label in self.stat_values.items():
+            label.setText(str(counts[key]))
     def apply_filter(self):
         filter_text = self.filter_combo.currentText()
         search_text = self.search_input.text().lower()

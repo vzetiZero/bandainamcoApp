@@ -81,6 +81,10 @@ và đặt ở khung nhật ký bên phải bảng.
 
 ### 2.2 Tab 1 — Danh sách tài khoản
 
+- Dashboard 4 thẻ thống kê trên bảng: Tổng / Hoạt động / Không hoạt động / Chưa kiểm tra.
+  `update_dashboard()` được gọi cuối `update_table()` nên số liệu luôn khớp bảng.
+  objectName: `statCard`, `statValueTotal`, `statValueActive`, `statValueInactive`,
+  `statValueUnchecked`, `statCaption` — màu khai báo trong `apply_styles()`.
 - Bảng **không còn cột `#`**: số thứ tự do vertical header đảm nhiệm. Cột 0 là Email,
   cột 1 Password, cột 2 Status — `apply_filter()` đọc đúng các index này.
 - Cột `Password` luôn hiển thị `********`.
