@@ -12,7 +12,7 @@ Windows desktop app for organizing BANDAI NAMCO ID / NAMCO Parks accounts.
 - A dashboard strip at the top of the account list tab shows total, active, inactive and unchecked account counts, refreshed together with the table.
 - Account table extras: hide/show columns (remembered between runs), click a header to sort, status drawn as colored badges, an empty-state message when no row matches the filter, and shortcuts Ctrl+N / Ctrl+I / Ctrl+F / Del.
 - The input dialog accepts a dragged .txt file and previews how many lines will be added, skipped as duplicates, or rejected before you press Thêm.
-- Edit only `first_name_kanji` through the profile dialog.
+- Edit the two Kanji name fields (`last_name_kanji`, `first_name_kanji`) in the profile dialog; the rest of the profile is read-only.
 - Send every request (login, check, name change) through proxies read from `proxy.txt`, configured in the Settings tab.
 
 ## Setup
@@ -25,6 +25,46 @@ python account_manager.py
 ```
 
 You can also run `install.bat` and `start.bat`.
+
+## Project structure
+
+The code is layered MVC-style, and every collaborator is injected from one composition root:
+
+```
+account_manager.py            entry point only (QApplication + main window)
+app/config.py                 URLs, CLIENT_ID, USER_AGENT, ENV_INFO, paths
+app/domain/                   pure rules, no Qt and no network
+    accounts.py               email|password|token lines, statuses, filters, counts
+    campaigns.py              campaign status + countdown from dates
+    login_rules.py            describe_login_error() — the only login success test
+    names.py                  NameForm, kanji_overrides()
+app/infrastructure/           adapters: the only place that touches network/disk/QSettings
+    bandai_auth.py            login → Parks2 handoff → member profile
+    bandai_profile.py         handoff + mypage/edit-page parsing
+    bandai_name.py            profile edit form (confirm + execute)
+    account_repository.py     accounts_data.json, with the legacy-password migration
+    settings_store.py         QSettings wrapper
+    web.py                    shared headers + cookie handling
+app/services/                 use cases the view calls
+    account_service.py        add/delete/status/profile/export
+    campaign_service.py       campaign CRUD + registration records
+app/ui/                       view, dialogs, QThread workers, delegate, table spec, stylesheet
+app/container.py              build_container() — wires the real collaborators
+```
+
+`AccountManager(container=...)` is how you hand the app a fake: pass a
+`session_factory` that returns a stub session and a temp `data_file`, and the whole
+login, profile and name-change flow runs offline.
+
+## Renaming from the command line
+
+```powershell
+python change_name.py --email user@example.com --password secret --last-name 山田 --first-name 太郎
+```
+
+Blank fields keep their current values; kana and nickname are only overwritten when you
+pass their flags. The client posts the site's `request=confirm` page, then the
+`request=execute` confirmation, and re-reads the profile page to prove the new names stuck.
 
 ## Campaigns
 

@@ -13,23 +13,41 @@ Tài liệu này mô tả **logic đã có**, **trạng thái triển khai** và
 Ứng dụng desktop Windows (PySide6) để quản lý danh sách tài khoản BANDAI NAMCO ID /
 NAMCO Parks: thêm, kiểm tra đăng nhập, đọc hồ sơ thành viên, đổi tên Kanji.
 
-| File | Vai trò |
-|---|---|
-| `account_manager.py` (~2000 dòng) | Toàn bộ UI + logic chính. Điểm khởi chạy app. |
-| `proxy_manager.py` | Quản lý proxy cho mọi HTTP request. Đọc `proxy.txt`. |
-| `change_name.py` | Module đổi tên, chạy độc lập (CLI) hoặc được gọi từ GUI. |
-| `icon_helper.py` | Nạp SVG icon từ thư mục `icons/`, có cache. |
-| `accounts_data.json` | Dữ liệu tài khoản + hồ sơ. **Git-ignored, chứa mật khẩu.** |
-| `proxy.txt` | Danh sách proxy. **Git-ignored, chứa user/pass.** |
+### 1.1 Cấu trúc MVC + DI
 
-### Hằng số mạng (trong cả 2 file)
+Project tách theo lớp; **mọi phụ thuộc đi qua `app/container.py`**, UI không tự
+`import` client mạng hay mở file dữ liệu.
+
+| Path | Vai trò | Chứa gì |
+|---|---|---|
+| `account_manager.py` (24 dòng) | Điểm khởi chạy | `QApplication` + `AccountManager()`. Không còn logic. |
+| `app/config.py` | Hằng số duy nhất | URL, `CLIENT_ID`, `USER_AGENT`, `ENV_INFO`, `ACCOUNT_COOKIE_DOMAIN`, `DATA_FILE`, `ICONS_DIR` |
+| `app/domain/` | **Model** — quy tắc thuần, không import PySide6/requests | `accounts.py` (dòng nhập liệu, trạng thái, lọc, đếm), `names.py` (`NameForm`, `kanji_overrides`), `campaigns.py` (trạng thái theo ngày), `login_rules.py` (`describe_login_error`) |
+| `app/infrastructure/` | **Adapter** — chạm mạng/dĩa/QSettings | `bandai_auth.py` (login + handoff + hồ sơ), `bandai_profile.py`, `bandai_name.py` (form đổi tên), `account_repository.py` (`accounts_data.json`), `settings_store.py` (QSettings), `web.py` (header + cookie) |
+| `app/services/` | **Use case** — nghiệp vụ trên model + repo | `account_service.py` (add/delete/status/profile/export), `campaign_service.py` (CRUD + đăng ký) |
+| `app/ui/` | **View/Controller** | `main_window.py` (view + handler), `dialogs.py`, `workers.py` (`QThread`), `delegates.py` (badge), `table_spec.py` (cột), `styles.py` (QSS) |
+| `app/container.py` | **Composition root** | `build_container(...)` trả `Container(settings, auth_client, name_client, account_repository, account_service, campaign_service)` |
+| `proxy_manager.py` | Proxy cho mọi HTTP request | `new_session()`, đọc `proxy.txt` |
+| `change_name.py` | CLI đổi tên | chỉ tham số dòng lệnh + gọi `BandaiNameClient.change_profile()` |
+| `icon_helper.py` | Nạp SVG icon | cache theo tên icon |
+| `accounts_data.json` | Dữ liệu tài khoản + hồ sơ | **Git-ignored, chứa mật khẩu.** |
+| `proxy.txt` | Danh sách proxy | **Git-ignored, chứa user/pass.** |
+
+**Chiều phụ thuộc:** `ui → services → domain` và `ui → infrastructure` (qua container);
+`domain` không biết `infrastructure`; `infrastructure` không biết `ui`. Muốn test mà
+không cần mạng: `build_container(session_factory=lambda: FakeSession(), settings=store,
+data_file=temp)` rồi truyền chai đó vào `AccountManager(container=...)`.
+
+### Hằng số mạng
+
+Toàn bộ nằm trong `app/config.py` — **đừng** khai báo lại ở nơi khác:
 
 ```python
 API_URL       = "https://account-api.bandainamcoid.com/"
 LOGIN_URL     = "https://account.bandainamcoid.com/login.html"
 CLIENT_ID     = "namcoparks_onlinestore"          # OAuth client đã đăng ký — KHÔNG ĐỔI
 REDIRECT_URI  = "https://parks2.bandainamco-am.co.jp/member_regist_new.html?backto=top"
-USER_AGENT    = "Mozilla/5.0 ... Chrome/120.0.0.0 Safari/537.36"   # dùng chung 2 nơi
+USER_AGENT    = "Mozilla/5.0 ... Chrome/120.0.0.0 Safari/537.36"
 ```
 
 > `CLIENT_ID` là client OAuth đã đăng ký của app NAMCO Parks, khớp `REDIRECT_URI`.
@@ -40,7 +58,7 @@ USER_AGENT    = "Mozilla/5.0 ... Chrome/120.0.0.0 Safari/537.36"   # dùng chung
 
 ## 2. Cấu trúc UI — toolbar + 3 tab
 
-`AccountManager.setup_ui()` dựng `QToolBar` rồi `QTabWidget` theo thứ tự:
+`AccountManager.setup_ui()` (app/ui/main_window.py) dựng `QToolBar` rồi `QTabWidget` theo thứ tự:
 
 | # | Tab | Hàm dựng | Nội dung |
 |---|---|---|---|
@@ -73,8 +91,10 @@ Panel nhập (`create_left_panel()`) không còn là tab — nó nằm trong `se
 | `actionExport` | Export | `download` | `export_accounts` | Export danh sách tài khoản ra file |
 
 **Quy ước bắt buộc:** muốn thêm nút mới thì đặt `objectName` và khai báo
-màu trong `apply_styles()`. **Không** dùng `setStyleSheet()` trực tiếp trên widget —
-`apply_styles()` xoá sạch stylesheet của mọi widget con mỗi lần đổi giao diện.
+màu trong bảng QSS của `app/ui/styles.py::build_stylesheet()`. `apply_styles()` chỉ còn
+hai việc: xoá stylesheet của từng widget con rồi `setStyleSheet(build_stylesheet(**read_appearance(self.ui_settings)))`.
+**Không** dùng `setStyleSheet()` trực tiếp trên widget —`apply_styles()` xoá sạch stylesheet
+của mọi widget con mỗi lần đổi giao diện.
 
 `progress_bar` nằm ở tab danh sách (trên bảng); `log_text` được tạo trong `setup_ui()`
 và đặt ở khung nhật ký bên phải bảng.
@@ -91,9 +111,10 @@ và đặt ở khung nhật ký bên phải bảng.
 - Danh sách cột là hằng số module `ACCOUNT_COLUMNS`. Nút **Cột hiển thị** (`column_button`)
   mở menu checkable; cột ẩn lưu QSettings key `hidden_account_columns` (JSON) qua
   `set_column_hidden()`. Email luôn hiển thị, không nằm trong menu.
-- Sắp xếp: `on_header_clicked()` **sắp lại chính `self.accounts`** rồi `update_table()` +
-  `save_data()` — index bảng luôn khớp list. Không dùng `setSortingEnabled()` vì sẽ phá
-  invariant index (context menu, xóa, double-click đều đọc `self.accounts[row]`).
+- Sắp xếp: `on_header_clicked()` **sắp lại tại chỗ danh sách của `AccountService`**
+  (property `self.accounts` trỏ đúng list đó) rồi `update_table()` + `save_data()` — index
+  bảng luôn khớp list. Không dùng `setSortingEnabled()` vì sẽ phá invariant index
+  (context menu, xóa, double-click đều đọc `self.accounts[row]`).
 - Cột Status vẽ badge bo tròn bởi `StatusDelegate` (màu từ `STATUS_BADGE_COLORS`, nền tint
   alpha 40 nên đúng cả theme sáng/tối); giá trị lạ fallback về vẽ mặc định.
 - Trạng thái rỗng: `empty_label` phủ giữa bảng khi chưa có tài khoản hoặc không dòng nào
@@ -137,7 +158,7 @@ của chính chiến dịch đó thay đổi. Trạng thái được **tính t�
 
 Hai cột **Trạng thái** và **Còn lại** không lưu — chúng tính lại mỗi lần vẽ bảng.
 
-### Hàm module-level (logic thuần, không đụng UI)
+### Hằng số module-level (logic thuần, không đụng UI) — `app/domain/campaigns.py`
 
 ```python
 CAMPAIGN_STATUS_OPEN          = "Đang mở"
@@ -167,9 +188,9 @@ số tài khoản đã ghi nhận cho chiến dịch đó, tô xanh dương; r�
 ### Vòng đời
 
 ```
-add_campaign()    → CampaignDialog → validate_and_accept() → validate name/url → append → save
-edit_campaign()   → selected_campaign_row() → CampaignDialog(campaign) → validate → gán đè → save
-delete_campaign() → selected_campaign_row() → QMessageBox hỏi → del → save
+add_campaign()    → CampaignDialog → validate_and_accept() → campaign_service.add() → refresh
+edit_campaign()   → selected_campaign_row() → CampaignDialog(campaign) → campaign_service.update(row, …)
+delete_campaign() → selected_campaign_row() → QMessageBox hỏi → campaign_service.remove(row)
 open_campaign()   → selected_campaign_row() → webbrowser.open(url)
 export_campaigns()→ QFileDialog → ghi file "|" ngăn cách
 ```
@@ -178,18 +199,19 @@ export_campaigns()→ QFileDialog → ghi file "|" ngăn cách
 định dạng ngày thì báo, và `closes_at <= opens_at` thì báo. Bỏ trống cả hai ngày thì hợp lệ
 (trạng thái Chưa rõ).
 
-### Hàm cốt lõi trong `AccountManager`
+### Chia trách nhiệm — view vs `CampaignService`
 
-| Hàm | Trách nhiệm |
+| Thuộc tính / hàm | Việc làm |
 |---|---|
-| `create_campaign_tab()` | Dựng hàng lọc + hàng nút + bảng 7 cột + `campaign_timer` |
-| `refresh_campaign_table()` | Vẽ lại bảng, tạo `self.campaign_states` (row → trạng thái) |
+| `campaign_service.add/update/remove/save` | Sửa list chiến dịch rồi ghi QSettings (qua `SettingsStore`), tự `prune_orphan_signups()` khi save |
+| `campaign_service.mark/unmark/signups_for/is_registered` | Ghi nhận tài khoản đã đăng ký theo khoá chiến dịch |
+| `campaign_service.key/is_valid` (staticmethod) | Khoá `"tên\|link"` và chuẩn kiểm tên + scheme http(s) |
+| `create_campaign_tab()` | Dựng hàng lọc + hàng nút + bảng 8 cột + `campaign_timer` |
+| `refresh_campaign_table()` | Vẽ lại bảng từ `self.campaigns`, tạo `self.campaign_states` (row → trạng thái) |
 | `update_campaign_summary()` | Dòng tổng kết + **cảnh báo sắp mở trong 24h, mỗi chiến dịch đúng 1 lần** |
 | `apply_campaign_filter()` | `setRowHidden` theo combo lọc + ô tìm kiếm tên/link |
 | `export_campaigns()` | Ghi file txt phân cách bằng `\|`, có dòng header |
 | `selected_campaign_row()` | Index dòng đang chọn, hoặc `None` + hộp thoại nhắc |
-| `save_campaigns()` | Ghi QSettings → `sync()` → refresh |
-| `add_campaign()` / `edit_campaign()` | Validate `name` khác rỗng và `urlparse(url).scheme in {"http","https"}` |
 
 ### Lọc và tìm kiếm
 
@@ -211,10 +233,11 @@ trước để cảnh báo chỉ bắn một lần cho mỗi chiến dịch.
 
 ### Lưu trữ và tương thích dữ liệu cũ
 
-- Biến trong RAM: `self.campaigns` (list[dict]).
+- Biến trong RAM: `CampaignService.campaigns` (list[dict]); view đọc qua property
+  `self.campaigns` / `self.campaign_signups` — **không có setter**, muốn sửa phải đi qua service.
 - Lưu: `QSettings("NAMCO", "AccountManager")` key `campaigns`, **chuỗi JSON**
-  (`ensure_ascii=False`).
-- Nạp trong `load_data()`, chống lỗi JSON hỏng (reset `[]`).
+  (`ensure_ascii=False`), ghi bởi `SettingsStore.set_json`.
+- Nạp trong `load_data()` → `campaign_service.load()`, chống lỗi JSON hỏng (reset `[]`).
 - Dữ liệu cũ ghi ngày dạng text tự do vẫn đọc được: `parse_campaign_time` trả `None`
   → hiển thị "Chưa rõ". Sửa lại qua nút **Sửa** là chuyển sang trạng thái thật.
 
@@ -247,14 +270,14 @@ dùng trên trang 抽選. App chỉ mở link và chép sẵn thông tin để g
 ### Lưu ghi nhận đăng ký
 
 ```python
-campaign_key(campaign)  # -> "tên|link", ổn định qua đổi thứ tự dòng
-self.campaign_signups    # {campaign_key: [{"email": ..., "at": "YYYY-MM-DD HH:MM:SS"}]}
+CampaignService.key(campaign)  # -> "tên|link", ổn định qua đổi thứ tự dòng
+campaign_service.signups       # {campaign_key: [{"email": ..., "at": "YYYY-MM-DD HH:MM:SS"}]}
 QSettings key: "campaign_signups"   # chuỗi JSON
 ```
 
-- `load_signups()` gọi trong `load_data()`, chống lỗi JSON hỏng → `{}`.
+- `campaign_service.load()` đọc cả hai key trong `load_data()`, chống lỗi JSON hỏng → `[]`/`{}`.
 - `save_signups()` ghi rồi refresh bảng.
-- `prune_orphan_signups()` chạy trong `save_campaigns()`: xoá ghi nhận của chiến dịch
+- `prune_orphan_signups()` chạy trong `campaign_service.save()`: xoá ghi nhận của chiến dịch
   đã bị xoá để dữ liệu không phình vô hạn.
 - `refresh_signup_accounts()` được gọi từ `update_table()` nên combo tài khoản luôn khớp
   danh sách; có so chữ ký `signup_account_emails` để không dựng lại combo vô ích.
@@ -300,41 +323,51 @@ new_session()                       # -> ProxySession, dùng thay requests.Sessi
 
 ### Điểm nối vào luồng chính
 
-- `LoginWorker.run()` → `session = new_session()`
-- `change_name.change_name()` → `session = new_session()`
+- `build_container()` mặc định đặt `session_factory = proxy_manager.new_session`, nên
+  `BandaiAuthClient` và `BandaiNameClient` đều đi qua proxy. Không client nào tự
+  `requests.Session()`.
+- `ProxyCheckWorker` gọi `check_all_proxies()` trực tiếp.
 - Tắt proxy → `next_proxies()` trả `None` → request đi thẳng như bản gốc.
 
 ### Vòng đời trong UI
 
 ```
-load_proxy_settings()   # đọc QSettings, blockSignals, apply_proxy_settings(reload_file=True)
+load_proxy_settings()   # đọc SettingsStore, blockSignals, apply_proxy_settings(reload_file=True)
 apply_proxy_settings()  # gán path/mode/enabled → proxy_manager.load() → refresh bảng → status
 ```
 
 `refresh_campaign_table` tương tự pattern này cho chiến dịch.
 
-Keys QSettings: `proxy_file`, `proxy_enabled`, `proxy_mode`.
+Keys: `proxy_file`, `proxy_enabled`, `proxy_mode` (đọc/ghi qua `SettingsStore`, không
+chạm `QSettings` trực tiếp ở services/UI).
 
 ---
 
 ## 5. Luồng đăng nhập — chi tiết nhất
 
-Đây là phần dễ vỡ nhất của dự án. `LoginWorker.run()`:
+Đây là phần dễ vỡ nhất của dự án. Logic nằm trong `BandaiAuthClient`
+(app/infrastructure/bandai_auth.py), UI chỉ nhận kết quả qua `LoginWorker`
+(app/ui/workers.py):
 
 ```
-1. progress 10  → session = new_session()
+1. progress 10  → session = session_factory()  (mặc định = proxy_manager.new_session)
 2. progress 25  → GET LOGIN_URL?client_id&redirect_uri
-                  + tự set cookie `language` (getLanguage() của site luôn ghi cookie này)
+                  + tự set cookie `language` ở miền ACCOUNT_COOKIE_DOMAIN
+                  (getLanguage() của site luôn ghi cookie này)
 3. progress 40  → GET {API_URL}v3/login/init   → apply_response_cookies()
                   (cấp cookie `challengeProd`; BỎ BƯỚC NÀY thì Parks2 không trả
                    btn-next và không bao giờ đọc được hồ sơ)
 4. progress 55  → POST {API_URL}v3/login/idpw  (login_id, password, env_info, cookie…)
-5. progress 70  → describe_login_error(payload)  (mục 5.0)
-                    ├─ có lỗi  → result_ready(False, lỗi) và DỪNG ở đây
-                    └─ không lỗi → inspect_login_handoff()  (mục 5.1)
+5. progress 70  → describe_login_error(payload)  (mục 5.0, app/domain/login_rules.py)
+                    ├─ có lỗi  → LoginOutcome(success=False, reason) và DỪNG ở đây
+                    └─ không lỗi → complete_parks2_handoff()  (mục 5.1)
                                     → fetch_member_profile() (mục 5.2)
 6. progress 100
 ```
+
+`login()` trả `(AuthenticatedSession|None, reason)`; `authenticate()` chạy trọn
+login → handoff → hồ sơ và trả `LoginOutcome(success, reason, profile, profile_fields,
+handoff)` — luôn thử đọc hồ sơ kể cả khi handoff báo lỗi.
 
 ### 5.0 `result == "OK"` KHÔNG có nghĩa là đăng nhập được
 
@@ -354,27 +387,30 @@ tiếng Việt để log dễ đọc. **Đừng** quay lại so `result == "OK"`
 
 ### 5.0.1 Định dạng dữ liệu tài khoản
 
-List tài khoản là `email|password|token` (3 trường). `parse_account_line()` tách theo
-**từng dấu `|`**: email = trường 1, password = trường 2, token = phần còn lại.
+List tài khoản là `email|password|token` (3 trường). `parse_account_line()`
+(app/domain/accounts.py) tách theo **từng dấu `|`**: email = trường 1, password = trường 2,
+token = phần còn lại.
 Bản cũ dùng `split('|', 1)` nên mật khẩu bị dính luôn token (`Letuemy…|k1gx82rp`) →
-mọi tài khoản đều sai credentials. `migrate_split_passwords()` trong `load_data()`
-sửa một lần cho dữ liệu đã lưu và chuyển phần thừa sang key `token`;
-`export_accounts()` ghi lại đủ 3 trường để round-trip không mất dữ liệu.
+mọi tài khoản đều sai credentials. `migrate_split_passwords()` chạy trong
+`AccountRepository.load()` sửa một lần cho dữ liệu đã lưu và chuyển phần thừa sang key
+`token`; `AccountService.export_lines()` ghi lại đủ 3 trường để round-trip không mất dữ liệu.
 
-### 5.1 Parks2 handoff — `inspect_login_handoff()`
+### 5.1 Parks2 handoff — `complete_parks2_handoff()`
+
+(app/infrastructure/bandai_profile.py)
 
 Mục tiêu: hoàn tất đăng nhập Parks2 **không tạo passkey**.
 
 ```
 redirect URL từ server → parse code
   → GET v3/passkey/info?client_id&code&...    (X-Requested-With: XMLHttpRequest)
-  → result != "OK"              → profile_fetch_status = "Could not complete..."
+  → result != "OK"              → HandoffResult(ok=False, status="Could not complete...")
   → apply_response_cookies()    (có `value` = set, thiếu = xoá)
   → data.btn.btn-next.url      → GET url (Accept HTML) → phải về parks2.bandainamco-am.co.jp
 ```
 
 **Bẻ nhánh quan trọng:** handoff fail **không** đồng nghĩa Parks2 không dùng được.
-`LoginWorker` luôn thử thêm `fetch_member_profile()` và chỉ ghi đè
+`BandaiAuthClient.authenticate()` luôn gọi thêm `fetch_member_profile()` và chỉ ghi đè
 `profile_fetch_status` khi lấy được hồ sơ.
 
 ### 5.2 Đọc hồ sơ — `fetch_member_profile()`
@@ -391,17 +427,32 @@ trích bằng regex trên text đã bỏ tag vì nó nằm ngoài cặp `dt/dd`.
 Tài khoản thật đã kiểm chứng trả về 16 trường (kanji/kana, nickname, giới tính, địa
 chỉ, điện thoại, điểm, trạng thái BNID…).
 
-### 5.3 Đổi tên — `change_name.py`
+### 5.3 Đổi tên / sửa hồ sơ — `BandaiNameClient.change_profile()`
 
-`change_name()` làm lại đúng 4 bước đầu của login flow (login page → init → idpw →
-handoff), rồi:
+Site là flow Interfactory **hai bước**; POST một lần duy nhất không sửa được gì:
 
 ```
-GET  member_regist.html?request=edit    → đọc hidden input + form action
-POST form_action                        → kèm trường trim của framework
+login + handoff + GET member_regist.html?request=edit   → parse_name_form(html, url, "memberFrm")
+POST action (request=confirm, đủ 5 field tên + trim)     → HTML có <form name="confirmForm">
+POST member_regist_confirm.html (request=execute,
+     token + CONFIRM_TOKEN)                               → lưu thật
+GET lại trang edit                                        → so từng field đã override
 ```
 
-Kết quả được đo thành công khi status 200 và HTML **không chứa** `error`/エラー.
+Ba điểm phải giữ:
+
+- **Chọn đúng form.** Trang edit chứa cả form tìm kiếm ở header/mobile
+  (`action="item_list.html"`); `form_block_html(html, form_name)` lấy theo
+  `name="memberFrm"` / `name="confirmForm"`. Chọn form đầu tiên là gửi sai chỗ.
+- **Gửi đủ mọi field.** `NameForm.form_data()` nạp giá trị hiện tại rồi mới đè override;
+  thiếu `L_KANA`/`F_KANA`/`NICKNAME` là xoá dữ liệu thật của tài khoản, thiếu
+  `jp.co.interfactory.framework.trim.<FIELD>` thì framework bỏ qua submit.
+- **Xác minh bằng đọc lại.** `change_profile` so từng field đã gửi với trang đọc lại;
+  khác nhau trả thất bại kèm "Trang vẫn hiển thị: ...".
+
+GUI (`ChangeNameWorker`) chỉ gửi hai trường Kanji qua `kanji_overrides()`; CLI
+`change_name.py` cho phép thêm kana/nickname. Kết quả được đo thành công khi status 200
+và HTML **không chứa** `error`/エラー.
 
 **Rủi ro đã biết:** cả hai bước đều dựa vào regex trên HTML, nên site đổi layout là
 gãy. Nếu cần sửa, hãy kiểm tra lại form action và tên hidden input trước.
@@ -423,13 +474,15 @@ rồi redirect về `error.html`. `USER_AGENT` vẫn là hằng số duy nhất 
 
 ## 6. Quản lý luồng (threading)
 
-Tất cả network call chạy trong `QThread` để không block UI.
+Tất cả network call chạy trong `QThread` để không block UI. Worker nằm trong
+`app/ui/workers.py` và **nhận client từ ngoài** (`auth_client`, `name_client`) thay vì
+tự tạo — truyền client giả là test được worker mà không cần mạng.
 
 | Worker | Signal | Dùng cho |
 |---|---|---|
-| `LoginWorker` | `result_ready(str,bool,str)`, `profile_ready(str,dict)`, `progress(int)` | 1 tài khoản |
+| `LoginWorker` | `result_ready(str,bool,str)`, `profile_ready(str,dict)`, `progress(int)` | 1 tài khoản; gọi `auth_client.authenticate()` rồi dịch `LoginOutcome` sang thông báo tiếng Việt |
 | `BatchCheckWorker` | `progress(int,int)`, `finished_check` | Cả danh sách, gọi `LoginWorker.run()` tuần tự, `time.sleep(0.5)` giữa các tài khoản |
-| `ChangeNameWorker` | `result_ready`, `progress` | Đổi tên |
+| `ChangeNameWorker` | `result_ready`, `progress` | Đổi tên; gọi `name_client.change_profile(..., kanji_overrides(last, first))` |
 | `ProxyCheckWorker` | `row_ready(int,bool,str)`, `finished_check` | Kiểm tra proxy song song |
 
 **Bẫy đã gặp:** `BatchCheckWorker` nối signal của `LoginWorker` con bằng
@@ -453,9 +506,14 @@ Tất cả network call chạy trong `QThread` để không block UI.
 | `font_size` | int | `9` |
 | `compact` | bool | `False` |
 | `campaign_signups` | chuỗi JSON | `"{}"` — map `"tên\|link"` → danh sách `{email, at}` |
+| `hidden_account_columns` | chuỗi JSON | `"[]"` — tập key cột đang ẩn, `set_column_hidden()` ghi |
 
-`apply_styles()` **xoá stylesheet của toàn bộ widget con** rồi áp lại bảng stylesheet
-theo theme, nên mọi style tĩnh phải nằm trong chính bảng đó (dùng `objectName`).
+UI/services không tự chạm `QSettings`; mọi reading/ghi đi qua `SettingsStore`
+(`get/get_bool/get_int/set`, `get_json/set_json`) và `Container.settings`.
+
+`apply_styles()` **xoá stylesheet của toàn bộ widget con** rồi áp `build_stylesheet()`
+(app/ui/styles.py) theo theme, nên mọi style tĩnh phải nằm trong bảng QSS của module đó
+(dùng `objectName`).
 
 ---
 
@@ -472,15 +530,30 @@ python account_manager.py          # hoặc start.bat / install.bat
 
 Không có test suite trong repo (`.gitignore` chặn `test_*.py`). Cách kiểm chứng đã
 dùng và hiệu quả: script tạm với `QT_QPA_PLATFORM=offscreen`, chèn dữ liệu giả vào
-widget, khẳng định trạng thái, rồi **xoá file tạm**. Với network thì monkey-patch
-`requests.Session.get/post` để chặn và kiểm tra header/payload thật.
+widget, khẳng định trạng thái, rồi **xoá file tạm**. Sau khi tách MVC/DI thì không cần
+patch mạng nữa:
+
+```python
+container = build_container(data_file=duong_dan_temp, session_factory=lambda: FakeSession(),
+                            settings=SettingsStore(), on_log=print)
+window = AccountManager(container=container)      # service + client đều là đồ giả
+```
+
+- `FakeSession` (chỉ có `get`/`post` trả HTML dựng sẵn) chứng minh được flow đổi tên
+  chạy **đủ hai bước** `request=confirm` → `request=execute`.
+- `AccountRepository(path=temp)` cho test migrate/add/save mà không đụng
+  `accounts_data.json` thật.
+- Với network thật thì monkey-patch `requests.Session.get/post` để chặn và kiểm tra
+  header/payload thật.
+- Chạy `python -m pyflakes app/ account_manager.py change_name.py` để bắt tên chưa import.
 
 ### Trước khi commit
 
-1. `python -m py_compile account_manager.py change_name.py proxy_manager.py`
-2. Xoá file tạm (`test_*_tmp.py`, ảnh chụp màn hình).
-3. `git status` phải sạch trừ các file chủ ý sửa.
-4. **Không** commit `accounts_data.json`, `proxy.txt`, `__pycache__/`.
+1. `python -m pyflakes app/ account_manager.py change_name.py`
+2. `python -m py_compile app/*.py app/*/*.py account_manager.py change_name.py proxy_manager.py`
+3. Xoá file tạm (`test_*_tmp.py`, `_*.py`, ảnh chụp màn hình, HTML dump chứa hồ sơ thật).
+4. `git status` phải sạch trừ các file chủ ý sửa.
+5. **Không** commit `accounts_data.json`, `proxy.txt`, `__pycache__/`.
 
 ### Commit + push (bắt buộc)
 
@@ -519,6 +592,9 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 | Màu cột Status | `10d8598` | Sửa bug so chuỗi không dấu |
 | Nút compact tab Nhập | `20d5914` | 4 nút một hàng |
 | Chủ đề sáng/tối, cỡ chữ | `717533c` | QSettings |
+| Tách MVC + DI toàn dự án | `662b2a6`…`c08bbd9` | `app/{config,domain,infrastructure,services,ui,container}`; `account_manager.py` còn 24 dòng |
+| Stylesheet ra khỏi view | `c08bbd9` | `app/ui/styles.py::build_stylesheet` + `read_appearance` |
+| Đổi tên chạy đủ 2 bước confirm/execute | `54369ee` | `BandaiNameClient.change_profile`; CLI cũ chỉ POST bước 1 nên không bao giờ đổi |
 
 ### 9.2 Đã thử rồi bỏ
 
@@ -568,3 +644,8 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
    phép là trợ lý *mở link + chép thông tin cho một tài khoản*, người dùng tự dán và
    tự bấm submit. Đừng mở rộng `open_campaign_with_account()` thành vòng lặp nhiều tài khoản.
 10. `signup_copy_password` mặc định **tắt**. Chỉ bật khi người dùng chủ động tick.
+11. Giữ nguyên phân lớp MVC + DI: `app/domain` là hàm thuần (không import PySide6,
+    `requests`, `QSettings`); network/dĩa/settings chỉ ở `app/infrastructure`; UI chỉ nhận
+    object từ `build_container()` — không `import requests`, không `QSettings(...)`, không
+    `AccountRepository()` ở trong view. Thêm tính năng mới thì thêm service/adapter rồi
+    nối ở container, đừng viết logic vào `main_window.py`.
