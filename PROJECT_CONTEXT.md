@@ -20,7 +20,7 @@ Project tách theo lớp; **mọi phụ thuộc đi qua `app/container.py`**, UI
 | `account_manager.py` (24 dòng) | Điểm khởi chạy | `QApplication` + `AccountManager()`. Không còn logic. |
 | `app/config.py` | Hằng số duy nhất | URL, `CLIENT_ID`, `USER_AGENT`, `ENV_INFO`, `ACCOUNT_COOKIE_DOMAIN`, `DATA_FILE`, `ICONS_DIR` |
 | `app/domain/` | **Model** — quy tắc thuần, không import PySide6/requests | `accounts.py` (dòng nhập liệu, trạng thái, lọc, đếm), `names.py` (`NameForm`, `kanji_overrides`), `campaigns.py` (trạng thái theo ngày), `login_rules.py` (`describe_login_error`), `ip_rules.py` (nhận diện lỗi chặn IP) |
-| `app/infrastructure/` | **Adapter** — chạm mạng/dĩa/QSettings | `bandai_auth.py` (login + handoff + hồ sơ), `bandai_profile.py`, `bandai_name.py` (form đổi tên), `account_repository.py` (`accounts_data.json`), `settings_store.py` (QSettings), `web.py` (header + cookie) |
+| `app/infrastructure/` | **Adapter** — chạm mạng/dĩa/QSettings | `bandai_auth.py` (login + handoff + hồ sơ), `bandai_profile.py`, `bandai_name.py` (form đổi tên), `account_repository.py` (`accounts_data.json`), `settings_store.py` (QSettings/INI), `web.py` (header + cookie) |
 | `app/services/` | **Use case** — nghiệp vụ trên model + repo | `account_service.py` (add/delete/status/profile/export), `campaign_service.py` (CRUD + đăng ký) |
 | `app/ui/` | **View/Controller** | `main_window.py` (view + handler), `dialogs.py`, `workers.py` (`QThread`), `delegates.py` (badge), `table_spec.py` (cột), `styles.py` (QSS) |
 | `app/container.py` | **Composition root** | `build_container(...)` trả `Container(settings, auth_client, name_client, account_repository, account_service, campaign_service)` |
@@ -563,6 +563,13 @@ vì `self.workers` luôn rỗng.
 
 ## 7. Bảng settings QSettings
 
+Cấu hình được lưu trong `ui_settings.ini` **ngay trong thư mục dự án** (do
+`build_container()` truyền `SETTINGS_FILE` vào `SettingsStore`), nên copy cả thư mục
+sang máy khác vẫn giữ nguyên cấu hình. Lần chạy đầu tiên, nếu file chưa có,
+`SettingsStore` chép toàn bộ key cũ từ registry `NAMCO/AccountManager` sang file
+(không mất cấu hình đang dùng). `SettingsStore()` không truyền `path` vẫn dùng
+registry như trước — dùng cho test.
+
 | Key | Kiểu | Mặc định |
 |---|---|---|
 | `campaigns` | chuỗi JSON | `"[]"` |
@@ -576,6 +583,14 @@ vì `self.workers` luôn rỗng.
 | `campaign_signups` | chuỗi JSON | `"{}"` — map `"tên\|link"` → danh sách `{email, at}` |
 | `hidden_account_columns` | chuỗi JSON | `"[]"` — tập key cột đang ẩn, `set_column_hidden()` ghi |
 | `max_workers` | int | `DEFAULT_CONCURRENCY` = **5**, clamp `1..MAX_CONCURRENCY` (10) khi đọc và khi ghi |
+| `window_geometry` | QByteArray | — `saveGeometry()`, khôi phục bằng `restoreGeometry()` |
+| `window_state` | QByteArray | — `saveState()` (vị trí toolbar/dock) |
+| `active_tab` | int | `0` — tab đang mở lúc đóng app |
+| `log_panel_visible` | bool | `False` — bảng nhật ký đang bật hay tắt |
+
+`restore_ui_state()` chạy cuối `AccountManager.__init__`; `save_ui_state()` chạy trong
+`closeEvent` trước `save_data()`. Nhờ vậy mở lại app là đúng tab, đúng kích thước
+cửa sổ, đúng trạng thái bảng nhật ký như lần trước.
 
 UI/services không tự chạm `QSettings`; mọi reading/ghi đi qua `SettingsStore`
 (`get/get_bool/get_int/set`, `get_json/set_json`) và `Container.settings`.

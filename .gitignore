@@ -1,6 +1,7 @@
 accounts_data.json
 namco_session.json
 proxy.txt
+ui_settings.ini
 __pycache__/
 *.py[cod]
 .venv/

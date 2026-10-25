@@ -16,6 +16,9 @@ ACCOUNT_COOKIE_DOMAIN = ".bandainamcoid.com"
 APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ICONS_DIR = os.path.join(APP_ROOT, "icons")
 DATA_FILE = "accounts_data.json"
+# Cấu hình giao diện/proxy lưu cạnh app (INI) để copy thư mục dự án sang máy
+# khác vẫn giữ nguyên; lần đầu chạy sẽ chuyển giá trị cũ từ registry sang.
+SETTINGS_FILE = os.path.join(APP_ROOT, "ui_settings.ini")
 PROXY_FORMAT_HINT = "ip:port:username:pass"
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")

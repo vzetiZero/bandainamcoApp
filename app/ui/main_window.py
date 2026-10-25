@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QGroupBox, QSizePolicy, QAbstractItemView, QMainWindow, QStatusBar,
     QToolBar, QApplication, QSpinBox,
 )
-from PySide6.QtCore import Qt, QTimer, QSize, QEvent
+from PySide6.QtCore import Qt, QTimer, QSize, QEvent, QByteArray
 from PySide6.QtGui import QAction, QIcon, QFont, QColor, QPixmap, QShortcut, QKeySequence
 
 from icon_helper import load_svg_icon, AppIcons
@@ -62,6 +62,7 @@ class AccountManager(QMainWindow):
         self.setup_ui()
         self.load_data()
         self.apply_styles()
+        self.restore_ui_state()
 
     # View đọc dữ liệu qua services; không tự giữ bản sao danh sách.
     @property
@@ -1894,6 +1895,39 @@ class AccountManager(QMainWindow):
             self.log(f"\u2717 {email}: {message}")
             QMessageBox.warning(self, "Th\u1ea5t b\u1ea1i", f"C\u1eadp nh\u1eadt h\u1ed3 s\u01a1 th\u1ea5t b\u1ea1i!\n{message}")
 
+    def restore_ui_state(self):
+        """Khôi phục bố cục lần chạy trước: kích thước/vị trí cửa sổ, tab, bảng nhật ký."""
+        geometry = self._saved_bytes("window_geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        state = self._saved_bytes("window_state")
+        if state is not None:
+            self.restoreState(state)
+        index = self.ui_settings.get_int("active_tab", 0)
+        if 0 <= index < self.tab_widget.count():
+            self.tab_widget.setCurrentIndex(index)
+        self.set_log_panel_visible(self.ui_settings.get_bool("log_panel_visible", False))
+
+    def save_ui_state(self):
+        """Ghi bố cục hiện tại để lần mở sau dùng lại, không phải chỉnh tay."""
+        self.ui_settings.set(
+            window_geometry=self.saveGeometry(),
+            window_state=self.saveState(),
+            active_tab=self.tab_widget.currentIndex(),
+            log_panel_visible=not self.log_panel.isHidden(),
+        )
+
+    def _saved_bytes(self, key):
+        """Đọc QByteArray đã lưu (hỗ trợ cả dạng chuỗi base64 của file INI)."""
+        value = self.ui_settings.get(key)
+        if isinstance(value, QByteArray):
+            return value
+        if isinstance(value, (bytes, bytearray)):
+            return QByteArray(value)
+        if isinstance(value, str) and value.strip():
+            return QByteArray.fromBase64(value.encode("ascii", "ignore"))
+        return None
+
     def closeEvent(self, event):
         # Dừng tất cả workers
         for worker in self.workers:
@@ -1905,5 +1939,6 @@ class AccountManager(QMainWindow):
         set_event_sink(None)
         self.flush_proxy_log()
 
+        self.save_ui_state()
         self.save_data()
         event.accept()

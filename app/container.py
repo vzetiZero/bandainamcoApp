@@ -8,7 +8,7 @@ from typing import Callable, Optional
 
 import requests
 
-from app.config import DATA_FILE
+from app.config import DATA_FILE, SETTINGS_FILE
 from app.infrastructure.account_repository import AccountRepository
 from app.infrastructure.bandai_auth import BandaiAuthClient
 from app.infrastructure.bandai_name import BandaiNameClient
@@ -39,7 +39,7 @@ def build_container(data_file: str = DATA_FILE,
     session giả thì toàn bộ client đi qua đó, không cần đụng tới UI.
     """
     factory = session_factory or new_session
-    settings = settings or SettingsStore()
+    settings = settings or SettingsStore(path=SETTINGS_FILE)
     auth_client = BandaiAuthClient(session_factory=factory)
     repository = AccountRepository(path=data_file, on_change=on_log)
     return Container(

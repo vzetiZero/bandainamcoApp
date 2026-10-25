@@ -1,13 +1,36 @@
 """Nơi chứa tuỳ chọn người dùng (QSettings) để UI/services không tự chạm QSettings."""
 import json
+import os
 from typing import Any
 
 from PySide6.QtCore import QSettings
 
 
 class SettingsStore:
-    def __init__(self, organization: str = "NAMCO", application: str = "AccountManager"):
-        self._settings = QSettings(organization, application)
+    """Đọc/ghi tuỳ chọn qua QSettings.
+
+    `path` khác rỗng: lưu thành file INI ngay trong thư mục dự án, nên copy cả
+    thư mục sang máy khác (hoặc bản sao mới) vẫn giữ nguyên cấu hình. Lần chạy
+    đầu tiên sẽ chép các giá trị cũ từ registry sang file để không mất cấu hình
+    đang dùng. `path` rỗng: giữ hành vi cũ - chỉ dùng registry Windows.
+    """
+
+    def __init__(self, organization: str = "NAMCO", application: str = "AccountManager",
+                 path: str = ""):
+        self._legacy = QSettings(organization, application)
+        if path:
+            first_run = not os.path.exists(path)
+            self._settings = QSettings(path, QSettings.Format.IniFormat)
+            if first_run:
+                self._copy_legacy_values()
+        else:
+            self._settings = self._legacy
+
+    def _copy_legacy_values(self):
+        """Chuyển cấu hình đang có trong registry sang file INI (chỉ lần đầu)."""
+        for key in self._legacy.allKeys():
+            self._settings.setValue(key, self._legacy.value(key))
+        self._settings.sync()
 
     def get(self, key: str, default: Any = None) -> Any:
         return self._settings.value(key, default)
