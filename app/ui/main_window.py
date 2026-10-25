@@ -1440,11 +1440,13 @@ class AccountManager(QMainWindow):
             else:
                 value = account.get(key)
                 value = "" if value is None else str(value)
-            item = self.table.item(row, column) or QTableWidgetItem()
+            item = self.table.item(row, column)
+            if item is None:
+                item = QTableWidgetItem()
+                self.table.setItem(row, column, item)
             item.setText(value)
             if column == EMAIL_COLUMN:
                 item.setData(PROGRESS_ROLE, self.row_progress.get(email, 0))
-            self.table.setItem(row, column, item)
         self.update_dashboard()
         self.apply_filter()
 

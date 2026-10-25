@@ -127,6 +127,11 @@ và đặt ở khung nhật ký bên phải bảng.
   `on_check_result`/`on_single_result` xoá fill (`set_row_progress(email, 0)`) trước khi ghi kết quả.
 - `refresh_account_row(email)` chỉ dựng lại một dòng (theo `account_row()`), dùng cho kết quả
   kiểm tra/đổi tên đơn lẻ; `update_dashboard()` + `apply_filter()` vẫn chạy sau đó.
+  Chỉ `setItem()` khi ô chưa có item: Qt 6 cảnh báo
+  "cannot insert an item that is already owned by another QTableWidget" và **bỏ qua** lần
+  insert đó kể cả khi item thuộc cùng bảng, nên code cũ `item or QTableWidgetItem()` rồi
+  `setItem()` lại sinh 21 dòng log mỗi lần refresh một dòng. Sửa: lấy item sẵn có →
+  `setText()` trực tiếp, chỉ tạo + insert khi `item is None`.
 - Trạng thái rỗng: `empty_label` phủ giữa bảng khi chưa có tài khoản hoặc không dòng nào
   khớp bộ lọc; geometry đồng bộ qua `eventFilter` bắt Resize của viewport.
 - Phím tắt: Ctrl+N mở dialog nhập, Ctrl+I import, Ctrl+F focus ô tìm kiếm,
