@@ -372,7 +372,6 @@ class AccountManager(QMainWindow):
         self.max_workers_input = QSpinBox()
         self.max_workers_input.setRange(1, MAX_CONCURRENCY)
         self.max_workers_input.setValue(self.max_workers)
-        self.max_workers_input.setSuffix(" luồng")
         self.max_workers_input.setToolTip(f"Mặc định {DEFAULT_CONCURRENCY}, tối đa {MAX_CONCURRENCY}")
         self.max_workers_input.valueChanged.connect(self.on_concurrency_changed)
         form.addRow("Số luồng chạy đồng thời:", self.max_workers_input)

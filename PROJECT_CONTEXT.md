@@ -162,7 +162,7 @@ và đặt ở khung nhật ký bên phải bảng.
 ### 2.4 Tab 4 — Cấu hình (chi tiết ở mục 4)
 
 Tab Cấu hình có nhóm **Kiểm tra đồng thời** (`_create_concurrency_group()`, `QSpinBox`
-`max_workers_input`, suffix " luồng", range `1..MAX_CONCURRENCY` ở `app/config.py`).
+`max_workers_input` chỉ hiển thị số 1..`MAX_CONCURRENCY` của `app/config.py`, không suffix).
 `on_concurrency_changed()` gán ngay `self.max_workers` và ghi QSettings `max_workers`, nên
 lần chạy batch kế tiếp dùng đúng số luồng vừa chọn. Mặc định `DEFAULT_CONCURRENCY = 5`.
 
