@@ -9,6 +9,12 @@ CLIENT_ID = "namcoparks_onlinestore"
 REDIRECT_URI = "https://parks2.bandainamco-am.co.jp/member_regist_new.html?backto=top"
 PARKS2_HOST = "https://parks2.bandainamco-am.co.jp"
 PARKS2_DOMAIN = "parks2.bandainamco-am.co.jp"
+# Parks2 có form đăng nhập riêng (không phải BNID) dùng cùng email/mật khẩu nhưng
+# là hệ thống phiên khác. Khi BNID khoá đăng nhập, form này vẫn vào được
+# member_mypage - đủ để đọc và sửa hồ sơ.
+PARKS2_LOGIN_URL = (PARKS2_HOST + "/login.html"
+                    "?request=redirect_logon&redirectTo=member_mypage.html")
+PARKS2_TOP_LOGIN_URL = PARKS2_HOST + "/top_login.html"
 ACCOUNT_ORIGIN = "https://account.bandainamcoid.com"
 # Cookie language phải đặt ở miền gốc: account-api là subdomain khác với
 # account, đặt cookie theo account sẽ không gửi tới account-api.

@@ -19,6 +19,10 @@ LOGIN_ERROR_TRANSLATIONS = [
     ("ロック", "Tài khoản đang bị khoá tạm thời"),
 ]
 
+# Dấu hiệu site báo khoá đăng nhập do nhập sai mật khẩu quá số lần (khác với sai
+# mật khẩu thường). Tách riêng để luồng đăng nhập còn thử được đường khác.
+PASSWORD_LOCKOUT_PATTERNS = ("ログインを制限", "一定回数")
+
 
 def translate_login_error(text):
     """Dịch thông báo lỗi tiếng Nhật sang câu dễ hiểu; giữ nguyên nếu chưa có bản dịch."""
@@ -26,6 +30,29 @@ def translate_login_error(text):
         if needle in text:
             return translation
     return text
+
+
+def error_text(payload):
+    """Gom mọi thông báo lỗi site trả về thành một chuỗi đã bỏ HTML."""
+    error_map = (payload or {}).get("input_error") or {}
+    message = error_map.get("error_msg") if isinstance(error_map, dict) else None
+    if isinstance(message, dict) and message:
+        text = " ".join(str(value) for value in message.values())
+    else:
+        data = (payload or {}).get("data")
+        text = str((data.get("msg") if isinstance(data, dict) else "") or "")
+    text = unescape(re.sub(r"<[^>]+>", " ", text))
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def is_password_lockout(payload):
+    """True khi site báo khoá đăng nhập vì nhập sai mật khẩu quá số lần.
+
+    Khoá này chặn trước cả bước so mật khẩu, nên nó không nói gì về việc mật khẩu
+    đúng hay sai - cần phân biệt với lỗi sai email/mật khẩu thông thường.
+    """
+    text = error_text(payload)
+    return any(needle in text for needle in PASSWORD_LOCKOUT_PATTERNS)
 
 
 def describe_login_error(payload):
@@ -44,9 +71,7 @@ def describe_login_error(payload):
         return translate_login_error(str(message or "Server từ chối yêu cầu đăng nhập"))
     error_map = (payload.get("input_error") or {}).get("error_msg")
     if isinstance(error_map, dict) and error_map:
-        text = unescape(re.sub(r"<[^>]+>", " ", " ".join(str(value) for value in error_map.values())))
-        text = re.sub(r"\s+", " ", text).strip()
-        return translate_login_error(text)
+        return translate_login_error(error_text(payload))
     redirect = payload.get("redirect") or payload.get("redirect_no-cache") or ""
     if not redirect or "error.html" in redirect:
         return "Không hoàn tất được phiên đăng nhập"

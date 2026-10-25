@@ -3,17 +3,24 @@
 Luồng đi đúng theo những gì JS của site làm (PROJECT_CONTEXT.md mục 5):
 login page -> v3/login/init -> v3/login/idpw -> passkey handoff -> hồ sơ Parks2.
 Không tạo passkey. Không Selenium.
+
+Khi BNID khoá đăng nhập (nhập sai mật khẩu quá số lần), luồng thử thêm form đăng
+nhập riêng của Parks2 (`top_login.html`): cùng email/mật khẩu nhưng là hệ thống
+phiên khác, vẫn vào được `member_mypage.html`.
 """
+import re
 from dataclasses import dataclass, field
+from html import unescape
 from typing import Callable, Optional
 
 import requests
 
 from app.config import (
-    ACCOUNT_COOKIE_DOMAIN, API_URL, CLIENT_ID, ENV_INFO, LOGIN_URL, REDIRECT_URI,
+    ACCOUNT_COOKIE_DOMAIN, API_URL, CLIENT_ID, ENV_INFO, LOGIN_URL, PARKS2_HOST,
+    PARKS2_LOGIN_URL, PARKS2_TOP_LOGIN_URL, REDIRECT_URI,
 )
 from app.domain.ip_rules import IPLockoutError, is_ip_lockout
-from app.domain.login_rules import describe_login_error
+from app.domain.login_rules import describe_login_error, is_password_lockout
 from app.infrastructure.bandai_profile import (
     REQUEST_TIMEOUT, HandoffResult, complete_parks2_handoff, fetch_member_profile,
 )
@@ -28,6 +35,8 @@ class AuthenticatedSession:
     headers: dict
     language: str
     redirect: str
+    # True khi phiên được tạo bằng form đăng nhập riêng của Parks2, không qua BNID.
+    parks2_direct: bool = False
 
 
 @dataclass
@@ -38,6 +47,8 @@ class LoginOutcome:
     profile: dict = field(default_factory=dict)
     profile_fields: int = 0
     handoff: Optional[HandoffResult] = None
+    # Ghi chú thêm cho UI, ví dụ đã phải vào bằng form Parks2 vì BNID đang khoá.
+    note: str = ""
 
 
 def parse_json(response):
@@ -51,6 +62,26 @@ def parse_json(response):
 # (cookie mới, proxy khác); từng request đã tự thử PROXY_ATTEMPTS proxy trong
 # proxy_manager nên không cần con số lớn.
 IP_LOCKOUT_ATTEMPTS = 2
+
+PARKS2_LOGIN_FORM = re.compile(
+    r'<form[^>]+action="[^"]*top_login\.html"[^>]*>(.*?)</form>', re.S | re.I)
+PARKS2_INPUT = re.compile(r"<input\b([^>]*)>", re.I)
+PARKS2_ATTR_NAME = re.compile(r'name=["\']([^"\']*)', re.I)
+PARKS2_ATTR_VALUE = re.compile(r'value=["\']([^"\']*)', re.I)
+
+
+def parks2_login_fields(html):
+    """Các input của form đăng nhập riêng Parks2, giữ nguyên field ẩn của framework."""
+    form = PARKS2_LOGIN_FORM.search(html or "")
+    fields = {}
+    for match in PARKS2_INPUT.finditer(form.group(1) if form else ""):
+        attrs = match.group(1)
+        name = PARKS2_ATTR_NAME.search(attrs)
+        if not name or not name.group(1):
+            continue
+        value = PARKS2_ATTR_VALUE.search(attrs)
+        fields[name.group(1)] = unescape(value.group(1)) if value else ""
+    return fields
 
 
 class BandaiAuthClient:
@@ -131,9 +162,45 @@ class BandaiAuthClient:
             raise IPLockoutError(proxy=session.proxy_label)
         reason = describe_login_error(login_payload)
         if reason:
+            # BNID khoá đăng nhập do nhập sai quá số lần, nhưng Parks2 có form đăng
+            # nhập riêng dùng cùng email/mật khẩu và không bị khoá theo. Chỉ thử khi
+            # gặp đúng lỗi khoá này, để mật khẩu sai thật không bị cộng thêm lần sai.
+            if is_password_lockout(login_payload) and self._parks2_login(
+                    session, email, password, headers):
+                return AuthenticatedSession(session, headers, language, "",
+                                            parks2_direct=True), ""
             return None, reason
         redirect = login_payload.get("redirect") or login_payload.get("redirect_no-cache") or ""
         return AuthenticatedSession(session, headers, language, redirect), ""
+
+    def _parks2_login(self, session, email: str, password: str, headers: dict) -> bool:
+        """Đăng nhập bằng form riêng của Parks2 (`top_login.html`).
+
+        Parks2 dùng hệ thống phiên riêng: cùng email/mật khẩu nhưng không đi qua
+        `v3/login/idpw`. Nhờ vậy tài khoản bị BNID khoá đăng nhập vẫn đọc và sửa
+        được hồ sơ. Trả True khi đã vào tới `member_mypage.html`.
+        """
+        parks2_headers = dict(headers)
+        parks2_headers["Accept"] = (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        parks2_headers["Origin"] = PARKS2_HOST
+        parks2_headers["Referer"] = PARKS2_LOGIN_URL
+        try:
+            page = session.get(PARKS2_LOGIN_URL, headers=parks2_headers,
+                               timeout=self._timeout)
+            if page.status_code != 200:
+                return False
+            fields = parks2_login_fields(page.text)
+            if "LOGINID" not in fields or "PASSWORD" not in fields:
+                return False
+            fields["LOGINID"] = email
+            fields["PASSWORD"] = password
+            response = session.post(PARKS2_TOP_LOGIN_URL, data=fields,
+                                    headers=parks2_headers, timeout=self._timeout,
+                                    allow_redirects=True)
+        except requests.RequestException:
+            return False
+        return response.status_code == 200 and "member_mypage" in response.url
 
     def authenticate(self, email: str, password: str,
                      on_progress: Optional[Callable[[int], None]] = None) -> LoginOutcome:
@@ -158,8 +225,12 @@ class BandaiAuthClient:
             return LoginOutcome(success=False, reason=reason)
 
         try:
-            handoff = complete_parks2_handoff(auth.session, auth.headers, auth.redirect,
-                                              auth.language, self._timeout)
+            # Phiên từ form đăng nhập riêng Parks2 đã là phiên Parks2: không có
+            # redirect/code để chạy handoff và cũng không cần.
+            handoff = (HandoffResult(ok=True) if auth.parks2_direct
+                       else complete_parks2_handoff(auth.session, auth.headers,
+                                                    auth.redirect, auth.language,
+                                                    self._timeout))
             profile = {"email": email, "password": password}
             if handoff.gender_code:
                 profile["gender_code"] = handoff.gender_code
@@ -181,5 +252,8 @@ class BandaiAuthClient:
                 handoff.status or "Parks2 login complete; no profile fields were parsed"
             )
         report(100)
+        note = ("qua form đăng nhập Parks2 (BNID đang khoá đăng nhập)"
+                if auth.parks2_direct else "")
         return LoginOutcome(success=True, profile=profile,
-                            profile_fields=len(member_profile), handoff=handoff)
+                            profile_fields=len(member_profile), handoff=handoff,
+                            note=note)

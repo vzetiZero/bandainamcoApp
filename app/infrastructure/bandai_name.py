@@ -9,7 +9,9 @@ import requests
 from app.config import PARKS2_HOST
 from app.domain.names import NameForm
 from app.infrastructure.bandai_auth import BandaiAuthClient
-from app.infrastructure.bandai_profile import REQUEST_TIMEOUT, complete_parks2_handoff
+from app.infrastructure.bandai_profile import (
+    REQUEST_TIMEOUT, HandoffResult, complete_parks2_handoff,
+)
 
 MEMBER_REGIST_URL = f"{PARKS2_HOST}/member_regist.html?request=edit"
 # Trang edit gửi form "memberFrm" với request=confirm; trang xác nhận gửi form
@@ -123,8 +125,12 @@ class BandaiNameClient:
         if auth is None:
             return None, None, None, f"Đăng nhập thất bại: {reason}"
         report(45)
-        handoff = complete_parks2_handoff(auth.session, auth.headers, auth.redirect,
-                                          auth.language, self._timeout)
+        if auth.parks2_direct:
+            # Form đăng nhập riêng Parks2 đã tạo phiên Parks2, không cần handoff.
+            handoff = HandoffResult(ok=True)
+        else:
+            handoff = complete_parks2_handoff(auth.session, auth.headers, auth.redirect,
+                                              auth.language, self._timeout)
         if not handoff.ok:
             return None, None, None, handoff.status or "Không nối tiếp được phiên Parks2"
         report(60)

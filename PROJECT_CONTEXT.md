@@ -410,7 +410,10 @@ chạm `QSettings` trực tiếp ở services/UI).
                    btn-next và không bao giờ đọc được hồ sơ)
 4. progress 55  → POST {API_URL}v3/login/idpw  (login_id, password, env_info, cookie…)
 5. progress 70  → describe_login_error(payload)  (mục 5.0, app/domain/login_rules.py)
-                    ├─ có lỗi  → LoginOutcome(success=False, reason) và DỪNG ở đây
+                    ├─ bị khoá đăng nhập (nhập sai quá số lần)
+                    │    → _parks2_login() (mục 5.0.2) — vẫn vào được thì đi tiếp
+                    │    → không vào được thì LoginOutcome(success=False, reason)
+                    ├─ lỗi khác → LoginOutcome(success=False, reason) và DỪNG ở đây
                     └─ không lỗi → complete_parks2_handoff()  (mục 5.1)
                                     → fetch_member_profile() (mục 5.2)
 6. progress 100
@@ -418,7 +421,8 @@ chạm `QSettings` trực tiếp ở services/UI).
 
 `login()` trả `(AuthenticatedSession|None, reason)`; `authenticate()` chạy trọn
 login → handoff → hồ sơ và trả `LoginOutcome(success, reason, profile, profile_fields,
-handoff)` — luôn thử đọc hồ sơ kể cả khi handoff báo lỗi.
+handoff, note)` — luôn thử đọc hồ sơ kể cả khi handoff báo lỗi. `note` là ghi chú
+thêm cho log (ví dụ đã phải vào bằng form Parks2).
 
 ### 5.0 `result == "OK"` KHÔNG có nghĩa là đăng nhập được
 
@@ -445,6 +449,32 @@ Bản cũ dùng `split('|', 1)` nên mật khẩu bị dính luôn token (`Letue
 mọi tài khoản đều sai credentials. `migrate_split_passwords()` chạy trong
 `AccountRepository.load()` sửa một lần cho dữ liệu đã lưu và chuyển phần thừa sang key
 `token`; `AccountService.export_lines()` ghi lại đủ 3 trường để round-trip không mất dữ liệu.
+
+### 5.0.2 Hai hệ thống đăng nhập khác nhau — BNID và Parks2
+
+Parks2 **không** chỉ đăng nhập qua BNID. Trang
+`https://parks2.bandainamco-am.co.jp/login.html?request=redirect_logon&redirectTo=member_mypage.html`
+có **form riêng** (`<form action=".../top_login.html">`, field `LOGINID`/`PASSWORD`)
+dùng cùng email/mật khẩu nhưng là hệ thống phiên khác (`JSESSIONID`, `BM-session-id`).
+Trang đọc thông số là `https://parks2.bandainamco-am.co.jp/member_mypage.html`.
+
+Hệ quả thực tế: một tài khoản có thể **bị BNID khoá đăng nhập** (nhập sai mật khẩu
+quá số lần) mà **vẫn đăng nhập được bằng form Parks2**. Khi BNID trả câu
+`間違ったパスワードが一定回数入力された為、ログインを制限しております`,
+`is_password_lockout()` (app/domain/login_rules.py) nhận ra và
+`BandaiAuthClient._parks2_login()` thử form Parks2:
+
+```
+GET  /login.html?request=redirect_logon&redirectTo=member_mypage.html
+     → parks2_login_fields(html)   lấy mọi <input> của form top_login.html
+POST /top_login.html  (LOGINID, PASSWORD + các field ẩn của framework)
+     → 200 + URL chứa member_mypage.html  = thành công
+```
+
+Chỉ thử khi gặp đúng lỗi khoá, nên mật khẩu sai thật **không** bị cộng thêm lần sai.
+Phiên này đã là phiên Parks2 nên `AuthenticatedSession.parks2_direct = True`:
+`authenticate()` bỏ qua handoff và đọc thẳng `fetch_member_profile()`;
+`BandaiNameClient.open_edit_page()` cũng bỏ qua handoff nên đổi tên vẫn chạy.
 
 ### 5.1 Parks2 handoff — `complete_parks2_handoff()`
 

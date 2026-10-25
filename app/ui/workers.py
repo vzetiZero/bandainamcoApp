@@ -40,12 +40,13 @@ class LoginWorker(QThread):
         profile.setdefault("last_check", None)
         self.profile_ready.emit(self.email, profile)
         if outcome.profile_fields:
-            self.result_ready.emit(
-                self.email, True,
-                f"Đăng nhập thành công - đọc được {outcome.profile_fields} trường hồ sơ")
+            message = (f"Đăng nhập thành công - đọc được "
+                       f"{outcome.profile_fields} trường hồ sơ")
         else:
-            self.result_ready.emit(
-                self.email, True, "Đăng nhập thành công nhưng chưa đọc được hồ sơ")
+            message = "Đăng nhập thành công nhưng chưa đọc được hồ sơ"
+        if outcome.note:
+            message += f" ({outcome.note})"
+        self.result_ready.emit(self.email, True, message)
         self.progress.emit(100)
 
     def stop(self):
