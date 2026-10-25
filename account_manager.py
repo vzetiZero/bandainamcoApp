@@ -819,13 +819,14 @@ class AccountManager(QMainWindow):
         self.tab_widget.setDocumentMode(True)
         main_layout.addWidget(self.tab_widget)
 
-        self.input_tab = self.create_left_panel()
-        input_layout = self.input_tab.layout()
-        input_layout.removeWidget(self.log_text)
-        self.log_text.hide()
-        input_layout.removeWidget(self.log_label)
-        self.log_label.hide()
-        self.tab_widget.addTab(self.input_tab, load_svg_icon(AppIcons.PLUS, 16), "Nhập tài khoản")
+        self.input_panel = self.create_left_panel()
+        self.input_dialog = QDialog(self)
+        self.input_dialog.setWindowTitle("Nhập tài khoản")
+        self.input_dialog.resize(560, 480)
+        input_dialog_layout = QVBoxLayout(self.input_dialog)
+        input_dialog_layout.setContentsMargins(0, 0, 0, 0)
+        input_dialog_layout.setSpacing(0)
+        input_dialog_layout.addWidget(self.input_panel)
 
         self.list_tab = QWidget()
         list_layout = QHBoxLayout(self.list_tab)
@@ -835,11 +836,11 @@ class AccountManager(QMainWindow):
         log_panel = QFrame()
         log_layout = QVBoxLayout(log_panel)
         log_layout.addWidget(QLabel("Nhật ký"))
-        self.log_text.show()
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
         self.log_text.setMinimumWidth(0)
         self.log_text.setObjectName("activityLog")
         self.log_text.setFont(QFont("Consolas", 8))
-        self.log_text.setMaximumHeight(16777215)
         log_layout.addWidget(self.log_text)
         log_panel.setMinimumWidth(180)
         list_layout.addWidget(log_panel, 1)
@@ -1552,52 +1553,36 @@ class AccountManager(QMainWindow):
         
         self.toolbar.addSeparator()
         
+        # Input Button
+        input_btn = QPushButton(" Nhập tài khoản")
+        input_btn.setObjectName("toolInput")
+        input_btn.setIcon(load_svg_icon(AppIcons.PLUS, 20, "#ffffff"))
+        input_btn.setToolTip("Mở ô nhập tài khoản thủ công")
+        input_btn.clicked.connect(self.open_input_dialog)
+        self.toolbar.addWidget(input_btn)
+        
         # Import Button
         import_btn = QPushButton(" Import TXT")
-        import_btn.setIcon(load_svg_icon(AppIcons.FOLDER_OPEN, 20, "#087f75"))
+        import_btn.setObjectName("toolImport")
+        import_btn.setIcon(load_svg_icon(AppIcons.FOLDER_OPEN, 20, "#ffffff"))
+        import_btn.setToolTip("Nhập tài khoản từ file TXT")
         import_btn.clicked.connect(self.import_from_txt)
-        import_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4a90d9;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #3a7bc8; }
-        """)
         self.toolbar.addWidget(import_btn)
         
         # Check All Button
         check_btn = QPushButton(" Ki\u1ec3m tra t\u1ea5t c\u1ea3 t\u00e0i kho\u1ea3n")
-        check_btn.setIcon(load_svg_icon(AppIcons.CHECK, 20, "#087f75"))
+        check_btn.setObjectName("toolCheckAll")
+        check_btn.setIcon(load_svg_icon(AppIcons.CHECK, 20, "#ffffff"))
+        check_btn.setToolTip("Kiểm tra đăng nhập toàn bộ danh sách")
         check_btn.clicked.connect(self.check_all_accounts)
-        check_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #28a745;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #218838; }
-        """)
         self.toolbar.addWidget(check_btn)
         
         # Delete Selected Button
         delete_btn = QPushButton(" Xóa đã chọn")
-        delete_btn.setIcon(load_svg_icon(AppIcons.TRASH, 20, "#087f75"))
+        delete_btn.setObjectName("toolDelete")
+        delete_btn.setIcon(load_svg_icon(AppIcons.TRASH, 20, "#ffffff"))
+        delete_btn.setToolTip("Xóa các dòng đang chọn trong bảng")
         delete_btn.clicked.connect(self.delete_selected)
-        delete_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #dc3545;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #c82333; }
-        """)
         self.toolbar.addWidget(delete_btn)
         
         # Spacer
@@ -1614,6 +1599,12 @@ class AccountManager(QMainWindow):
         appearance_btn.setToolTip("Tùy chỉnh màu sắc, cỡ chữ và mật độ bảng")
         appearance_btn.clicked.connect(self.open_appearance_settings)
         self.toolbar.addWidget(appearance_btn)
+
+    def open_input_dialog(self):
+        self.input_dialog.show()
+        self.input_dialog.raise_()
+        self.input_dialog.activateWindow()
+        self.text_input.setFocus()
 
     def create_left_panel(self):
         panel = QFrame()
@@ -1635,7 +1626,7 @@ class AccountManager(QMainWindow):
         layout.addWidget(title)
         
         # Format hint
-        hint = QLabel("Định dạng: email|mởi dòng 1 tài khoản")
+        hint = QLabel("Định dạng: email|password, mỗi dòng 1 tài khoản")
         hint.setStyleSheet("color: #666; font-size: 12px;")
         layout.addWidget(hint)
         
@@ -1688,31 +1679,6 @@ class AccountManager(QMainWindow):
         btn_layout.addStretch(1)
         layout.addLayout(btn_layout)
         
-        # Progress
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        layout.addWidget(self.progress_bar)
-        
-        # Log (nhãn + nội dung được chuyển sang tab danh sách tài khoản)
-        self.log_label = QLabel("Nhật ký:")
-        self.log_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
-        layout.addWidget(self.log_label)
-        
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(150)
-        self.log_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #1e1e1e;
-                color: #d4d4d4;
-                border-radius: 4px;
-                padding: 5px;
-                font-family: Consolas, monospace;
-                font-size: 11px;
-            }
-        """)
-        layout.addWidget(self.log_text)
-        
         layout.addStretch()
         
         return panel
@@ -1736,14 +1702,18 @@ class AccountManager(QMainWindow):
         title.setStyleSheet("font-size: 16px; font-weight: bold; color: #333;")
         layout.addWidget(title)
         
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        layout.addWidget(self.progress_bar)
+        
         # Table
         self.table = QTableWidget()
-        self.table.setColumnCount(5)
+        self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels([
-            "STT", "Email", "Mật khẩu", "Trạng thái", "Kiểm tra lần cuối"
+            "Email", "Mật khẩu", "Trạng thái", "Kiểm tra lần cuối"
         ])
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1825,6 +1795,7 @@ class AccountManager(QMainWindow):
             theme = "light"
         if accent not in ("#d61718", "#2864c5", "#168578"):
             accent = "#d61718"
+        accent_hover = {"#d61718": "#b51515", "#2864c5": "#1f4fa8", "#168578": "#106b60"}[accent]
 
         if theme == "dark":
             bg, surface, text, muted, border, alternate = "#171a21", "#222733", "#edf0f6", "#aab3c2", "#394252", "#1d222c"
@@ -1856,6 +1827,15 @@ class AccountManager(QMainWindow):
             QPushButton#actionCheck:hover {{ background: #218838; }}
             QPushButton#actionExport {{ background: #2864c5; }}
             QPushButton#actionExport:hover {{ background: #1f4fa8; }}
+            QPushButton#toolInput, QPushButton#toolImport, QPushButton#toolCheckAll, QPushButton#toolDelete {{ color: white; border: none; padding: 8px 16px; border-radius: 6px; font-weight: 700; }}
+            QPushButton#toolInput {{ background: {accent}; }}
+            QPushButton#toolInput:hover {{ background: {accent_hover}; }}
+            QPushButton#toolImport {{ background: #4a90d9; }}
+            QPushButton#toolImport:hover {{ background: #3a7bc8; }}
+            QPushButton#toolCheckAll {{ background: #28a745; }}
+            QPushButton#toolCheckAll:hover {{ background: #218838; }}
+            QPushButton#toolDelete {{ background: #dc3545; }}
+            QPushButton#toolDelete:hover {{ background: #c82333; }}
             QLineEdit, QTextEdit, QComboBox {{ background: {surface}; color: {text}; border: 1px solid {border}; border-radius: 6px; padding: 7px; selection-background-color: {accent}; }}
             QTextEdit#activityLog {{ font-size: 8pt; }}
             QLineEdit:focus, QTextEdit:focus, QComboBox:focus {{ border: 2px solid {accent}; }}
@@ -2220,7 +2200,7 @@ class AccountManager(QMainWindow):
     # ============================================================
     def update_table(self):
         columns = [
-            ("#", None), ("Email", "email"), ("Password", "__password__"),
+            ("Email", "email"), ("Password", "__password__"),
             ("Status", "status"), ("Last check", "last_check"),
             ("Last name (Kanji)", "last_name_kanji"), ("First name (Kanji)", "first_name_kanji"),
             ("Last name (Kana)", "last_name_kana"), ("First name (Kana)", "first_name_kana"),
@@ -2236,9 +2216,7 @@ class AccountManager(QMainWindow):
         self.table.setRowCount(len(self.accounts))
         for row, account in enumerate(self.accounts):
             for column, (label, key) in enumerate(columns):
-                if key is None:
-                    value = str(row + 1)
-                elif key == "__password__":
+                if key == "__password__":
                     value = "********"
                 else:
                     value = account.get(key)
@@ -2259,8 +2237,8 @@ class AccountManager(QMainWindow):
         search_text = self.search_input.text().lower()
         
         for i in range(self.table.rowCount()):
-            email_item = self.table.item(i, 1)
-            status_item = self.table.item(i, 3)
+            email_item = self.table.item(i, 0)
+            status_item = self.table.item(i, 2)
             
             if not email_item or not status_item:
                 continue

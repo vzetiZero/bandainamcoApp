@@ -8,7 +8,7 @@ Windows desktop app for organizing BANDAI NAMCO ID / NAMCO Parks accounts.
 - Track limited-time campaign windows with dates parsed for real, a derived status column, a countdown, filters, and a warning when a campaign opens within 24 hours.
 - Check account credentials and save the latest check time.
 - Show profile fields, points, and membership flags in the account table after the Parks2 login handoff completes.
-- Keep account input and account list in separate tabs; the activity log appears beside the account table.
+- Open the account input panel from the toolbar button **Nhập tài khoản** (same row as Import TXT); the account list tab comes first and the activity log appears beside the account table.
 - Edit only `first_name_kanji` through the profile dialog.
 - Send every request (login, check, name change) through proxies read from `proxy.txt`, configured in the Settings tab.
 

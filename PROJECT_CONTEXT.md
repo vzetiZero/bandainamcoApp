@@ -38,20 +38,32 @@ USER_AGENT    = "Mozilla/5.0 ... Chrome/120.0.0.0 Safari/537.36"   # dùng chung
 
 ---
 
-## 2. Cấu trúc UI — 4 tab
+## 2. Cấu trúc UI — toolbar + 3 tab
 
-`AccountManager.setup_ui()` dựng `QTabWidget` theo thứ tự:
+`AccountManager.setup_ui()` dựng `QToolBar` rồi `QTabWidget` theo thứ tự:
 
 | # | Tab | Hàm dựng | Nội dung |
 |---|---|---|---|
-| 1 | Nhập tài khoản | `create_left_panel()` | Ô nhập `email\|password`, 4 nút compact |
-| 2 | Danh sách tài khoản | `create_right_panel()` | Bảng 22 cột + nhật ký bên phải |
-| 3 | Chiến dịch | `create_campaign_tab()` | Bảng CRUD chiến dịch |
-| 4 | Cấu hình | `create_settings_tab()` | Bật/tắt proxy, file, chế độ, kiểm tra proxy |
+| 1 | Danh sách tài khoản | `create_right_panel()` | Bảng 21 cột + progress + nhật ký bên phải |
+| 2 | Chiến dịch | `create_campaign_tab()` | Bảng CRUD chiến dịch |
+| 3 | Cấu hình | `create_settings_tab()` | Bật/tắt proxy, file, chế độ, kiểm tra proxy |
 
-### 2.1 Tab 1 — Nhập tài khoản
+### 2.0 Toolbar — nút hành động
 
-4 nút gọn trên một hàng, tất cả dùng `objectName` để style trong `apply_styles()`:
+4 nút hành động cùng cấp trên toolbar, style qua `objectName` trong `apply_styles()`:
+
+| objectName | Nhãn | Handler |
+|---|---|---|
+| `toolInput` | Nhập tài khoản | `open_input_dialog()` — mở `self.input_dialog` |
+| `toolImport` | Import TXT | `import_from_txt` |
+| `toolCheckAll` | Kiểm tra tất cả tài khoản | `check_all_accounts` |
+| `toolDelete` | Xóa đã chọn | `delete_selected` |
+
+### 2.1 Dialog Nhập tài khoản
+
+Panel nhập (`create_left_panel()`) không còn là tab — nó nằm trong `self.input_dialog`
+(`QDialog` không modal, giữ nguyên widget giữa các lần mở). Ô nhập `email|password`,
+4 nút compact trên một hàng, tất cả dùng `objectName` để style trong `apply_styles()`:
 
 | objectName | Nhãn | Icon | Handler | Tooltip |
 |---|---|---|---|---|
@@ -60,15 +72,17 @@ USER_AGENT    = "Mozilla/5.0 ... Chrome/120.0.0.0 Safari/537.36"   # dùng chung
 | `actionCheck` | Kiểm tra đầu tiên | `check` | `check_first_account` | Kiểm tra tài khoản đầu tiên trong danh sách |
 | `actionExport` | Export | `download` | `export_accounts` | Export danh sách tài khoản ra file |
 
-**Quy ước bắt buộc:** muốn thêm nút mới vào tab này thì đặt `objectName` và khai báo
+**Quy ước bắt buộc:** muốn thêm nút mới thì đặt `objectName` và khai báo
 màu trong `apply_styles()`. **Không** dùng `setStyleSheet()` trực tiếp trên widget —
 `apply_styles()` xoá sạch stylesheet của mọi widget con mỗi lần đổi giao diện.
 
-Ô nhật ký (`log_text`) và nhãn `log_label` được **di chuyển** sang tab 2
-(xem `setup_ui()`); tab 1 chỉ còn `text_input`.
+`progress_bar` nằm ở tab danh sách (trên bảng); `log_text` được tạo trong `setup_ui()`
+và đặt ở khung nhật ký bên phải bảng.
 
-### 2.2 Tab 2 — Danh sách tài khoản
+### 2.2 Tab 1 — Danh sách tài khoản
 
+- Bảng **không còn cột `#`**: số thứ tự do vertical header đảm nhiệm. Cột 0 là Email,
+  cột 1 Password, cột 2 Status — `apply_filter()` đọc đúng các index này.
 - Cột `Password` luôn hiển thị `********`.
 - Cột `Status` tô màu: `Hoạt động` → `#28a745`, `Không hoạt động` → `#dc3545`,
   `Chưa kiểm tra` → `#8a94a6`. Phải so sánh **chuỗi có dấu chính xác**
