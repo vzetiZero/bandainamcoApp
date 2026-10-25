@@ -4,9 +4,9 @@ Windows desktop app for organizing BANDAI NAMCO ID / NAMCO Parks accounts.
 
 ## Features
 
-- Add accounts manually or import `email|password` lines from a text file.
+- Add accounts manually or import `email|password|token` lines from a text file (the trailing token is kept separately and is not part of the password).
 - Track limited-time campaign windows with dates parsed for real, a derived status column, a countdown, filters, and a warning when a campaign opens within 24 hours.
-- Check account credentials and save the latest check time.
+- Check account credentials against the live login flow and report the server's real reason when a login is rejected.
 - Show profile fields, points, and membership flags in the account table after the Parks2 login handoff completes.
 - Open the account input panel from the toolbar button **Nhập tài khoản** (same row as Import TXT); the account list tab comes first and the activity log appears beside the account table.
 - A dashboard strip at the top of the account list tab shows total, active, inactive and unchecked account counts, refreshed together with the table.

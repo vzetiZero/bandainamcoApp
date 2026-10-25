@@ -39,9 +39,12 @@ CLIENT_ID = "namcoparks_onlinestore"
 REDIRECT_URI = "https://parks2.bandainamco-am.co.jp/member_regist_new.html?backto=top"
 DATA_FILE = "accounts_data.json"
 PROXY_FORMAT_HINT = "ip:port:username:pass"
-# env_info.ua phải khớp chính xác header User-Agent, nếu không client tự mâu thuẫn về thiết bị của mình
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+# env_info là thông tin thiết bị mà JS của site tự lấy từ navigator.userAgentData
+# (getEnvInfo() trong webauthn-client.js). Site chỉ chấp nhận đúng 2 trường này;
+# gửi sai dạng khiến server trả result=NG và redirect về error.html.
+ENV_INFO = json.dumps({"mobile": False, "platform": "Windows"}, separators=(",", ":"))
 
 # Cột của bảng tài khoản: (nhãn header, key trong dict account)
 ACCOUNT_COLUMNS = [
@@ -62,6 +65,88 @@ STATUS_BADGE_COLORS = {
     "Không hoạt động": "#dc3545",
     "Chưa kiểm tra": "#8a94a6",
 }
+
+
+def parse_account_line(line):
+    """
+    Tách một dòng nhập liệu.
+
+    Định dạng của list tài khoản là `email|password|token` (token là mã riêng của
+    từng tài khoản, không dùng để đăng nhập). Mật khẩu là trường thứ hai, KHÔNG phải
+    "mọi thứ sau dấu |" - lấy cả token vào mật khẩu thì server từ chối credentials.
+    Trả về dict account, hoặc None khi dòng thiếu email/password.
+    """
+    text = (line or "").strip()
+    if "|" not in text:
+        return None
+    parts = [part.strip() for part in text.split("|")]
+    email = parts[0]
+    password = parts[1] if len(parts) > 1 else ""
+    if not email or not password:
+        return None
+    account = {"email": email, "password": password, "status": "Chưa kiểm tra", "last_check": None}
+    token = "|".join(parts[2:]).strip() if len(parts) > 2 else ""
+    if token:
+        account["token"] = token
+    return account
+
+
+def cookie_payload(session):
+    """JSON của các cookie đang có - site yêu cầu trường `cookie` ở mọi request."""
+    return json.dumps({cookie.name: cookie.value for cookie in session.cookies})
+
+
+def apply_response_cookies(session, payload):
+    """Giống cookie_processing() của site: đặt cookie có value, xoá cookie chỉ có tên."""
+    for cookie_data in (payload or {}).get("cookie", {}).values():
+        name = cookie_data.get("name")
+        if not name:
+            continue
+        if "value" in cookie_data:
+            kwargs = {"path": cookie_data.get("path") or "/"}
+            if cookie_data.get("domain"):
+                kwargs["domain"] = cookie_data["domain"]
+            session.cookies.set(name, cookie_data["value"], **kwargs)
+            continue
+        for existing in list(session.cookies):
+            if existing.name == name:
+                try:
+                    session.cookies.clear(existing.domain, existing.path, name)
+                except KeyError:
+                    pass
+
+
+# Site trả lời bằng tiếng Nhật; dịch sẵn các lỗi thường gặp để log dễ đọc.
+LOGIN_ERROR_TRANSLATIONS = [
+    ("間違っている", "Sai email/mật khẩu, hoặc tài khoản chưa đăng ký"),
+    ("ロック", "Tài khoản đang bị khoá tạm thời"),
+]
+
+
+def describe_login_error(payload):
+    """
+    Đổi response đăng nhập thành mô-típ lỗi; trả None khi đăng nhập thành công thật.
+
+    `result == "OK"` KHÔNG đồng nghĩa đã xác thực: khi sai credentials server vẫn trả
+    OK kèm input_error và không có redirect, nên chỉ nhìn result thì mọi tài khoản
+    đều báo "thành công" mà không đọc được hồ sơ.
+    """
+    if payload.get("result") != "OK":
+        data = payload.get("data")
+        message = data.get("msg") if isinstance(data, dict) else None
+        return str(message or "Server từ chối yêu cầu đăng nhập")
+    error_map = (payload.get("input_error") or {}).get("error_msg")
+    if isinstance(error_map, dict) and error_map:
+        text = unescape(re.sub(r"<[^>]+>", " ", " ".join(str(value) for value in error_map.values())))
+        text = re.sub(r"\s+", " ", text).strip()
+        for needle, translation in LOGIN_ERROR_TRANSLATIONS:
+            if needle in text:
+                return translation
+        return text
+    redirect = payload.get("redirect") or payload.get("redirect_no-cache") or ""
+    if not redirect or "error.html" in redirect:
+        return "Không hoàn tất được phiên đăng nhập"
+    return None
 
 
 class StatusDelegate(QStyledItemDelegate):
@@ -246,7 +331,7 @@ def inspect_login_handoff(session, headers, redirect_url, language):
         "redirect_uri": query.get("redirect_uri", [""])[0] or REDIRECT_URI,
         "customize_id": query.get("customize_id", [""])[0],
     }
-    params.update({"code": code, "language": language, "cookie": json.dumps(session.cookies.get_dict())})
+    params.update({"code": code, "language": language, "cookie": cookie_payload(session)})
     request_headers = dict(headers)
     request_headers["X-Requested-With"] = "XMLHttpRequest"
     request_headers["Referer"] = redirect_url
@@ -257,24 +342,7 @@ def inspect_login_handoff(session, headers, redirect_url, language):
         return {"profile_fetch_status": "Could not complete the Parks2 login handoff"}
     if data.get("result") != "OK":
         return {"profile_fetch_status": "Could not complete the Parks2 login handoff"}
-    for cookie in data.get("cookie", {}).values():
-        name = cookie.get("name")
-        if not name:
-            continue
-        domain = cookie.get("domain")
-        path = cookie.get("path", "/")
-        if "value" in cookie:
-            kwargs = {"path": path}
-            if domain:
-                kwargs["domain"] = domain
-            session.cookies.set(name, cookie["value"], **kwargs)
-        else:
-            for existing in list(session.cookies):
-                if existing.name == name and (not domain or existing.domain == domain):
-                    try:
-                        session.cookies.clear(domain=existing.domain, path=existing.path, name=name)
-                    except requests.cookies.CookieConflictError:
-                        pass
+    apply_response_cookies(session, data)
     result = {}
     details = data.get("data", {})
     gadata = details.get("gadata", {}) if isinstance(details, dict) else {}
@@ -315,7 +383,6 @@ class LoginWorker(QThread):
         try:
             self.progress.emit(10)
             session = new_session()
-            
             headers = {
                 "User-Agent": USER_AGENT,
                 "Accept": "application/json, text/javascript, */*; q=0.01",
@@ -324,87 +391,82 @@ class LoginWorker(QThread):
                 "Referer": LOGIN_URL,
             }
 
-            self.progress.emit(30)
-            
-            # Lấy cookies
-            login_params = {
-                "client_id": CLIENT_ID,
-                "redirect_uri": REDIRECT_URI,
-            }
-            session.get(LOGIN_URL, params=login_params, headers=headers, timeout=30)
-            language = session.cookies.get("language", "ja")
+            self.progress.emit(25)
+            session.get(LOGIN_URL, params={"client_id": CLIENT_ID, "redirect_uri": REDIRECT_URI},
+                        headers=headers, timeout=30)
+            language = session.cookies.get("language") or "ja"
+            # getLanguage() của site luôn tự ghi cookie language; server cần nhìn thấy nó.
+            session.cookies.set("language", language, domain=".bandainamcoid.com", path="/")
 
-            self.progress.emit(50)
-            
-            # Đăng nhập
-            env_info = json.dumps({
-                "ua": USER_AGENT,
-                "lang": language,
-                "plat": "Win32",
-                "sw": 1920,
-                "sh": 1080,
-            }, separators=(',', ':'))
+            self.progress.emit(40)
+            # init cấp cookie challenge. Bỏ qua bước này thì Parks2 không trả URL nối tiếp
+            # và hồ sơ thành viên không bao giờ đọc được.
+            init_payload = self._json(session.get(
+                f"{API_URL}v3/login/init", params={
+                    "client_id": CLIENT_ID, "redirect_uri": REDIRECT_URI, "customize_id": "",
+                    "language": language, "prompt": "", "sns_not_found": "", "lockout_child": "",
+                    "cookie": cookie_payload(session), "backto": "", "response_type": "",
+                    "scope": "", "state": "", "nonce": "",
+                }, headers=headers, timeout=30))
+            apply_response_cookies(session, init_payload)
 
-            login_data = {
-                "client_id": CLIENT_ID,
-                "redirect_uri": REDIRECT_URI,
-                "backto": "",
-                "customize_id": "",
-                "login_id": self.email,
-                "password": self.password,
-                "env_info": env_info,
-                "retention": 1,
-                "language": language,
-                "cookie": json.dumps({}),
-                "prompt": "",
-            }
+            self.progress.emit(55)
+            login_payload = self._json(session.post(
+                f"{API_URL}v3/login/idpw", data={
+                    "client_id": CLIENT_ID, "redirect_uri": REDIRECT_URI, "backto": "",
+                    "customize_id": "", "login_id": self.email, "password": self.password,
+                    "env_info": ENV_INFO, "retention": 1, "language": language,
+                    "cookie": cookie_payload(session), "prompt": "",
+                }, headers=headers, timeout=30))
+            apply_response_cookies(session, login_payload)
 
             self.progress.emit(70)
-            
-            response = session.post(
-                f"{API_URL}v3/login/idpw",
-                data=login_data,
-                headers=headers,
-                timeout=30
-            )
-            
-            self.progress.emit(90)
-            
-            response_data = response.json()
-            
-            if response_data.get("result") == "OK":
-                for cookie_data in response_data.get("cookie", {}).values():
-                    if cookie_data.get("name") and "value" in cookie_data:
-                        session.cookies.set(cookie_data["name"], cookie_data["value"])
-                profile = {"email": self.email, "password": self.password}
-                handoff = inspect_login_handoff(session, headers, response_data.get("redirect", ""), language)
-                handoff_status = handoff.get("profile_fetch_status")
-                profile.update({key: value for key, value in handoff.items() if key != "profile_fetch_status"})
+            error_text = describe_login_error(login_payload)
+            if error_text:
+                self.result_ready.emit(self.email, False, f"Đăng nhập thất bại: {error_text}")
+                self.progress.emit(100)
+                return
 
-                # A failed passkey handoff does not necessarily mean the Parks2
-                # profile page is unavailable, so always try the direct page fetch.
-                member_profile = fetch_member_profile(session, headers)
-                if member_profile:
-                    profile.update(member_profile)
-                    profile["profile_fetch_status"] = "Profile loaded from Parks2"
-                    if handoff_status:
-                        profile["parks2_handoff_status"] = handoff_status
-                else:
-                    profile["profile_fetch_status"] = handoff_status or "Parks2 login complete; no profile fields were parsed"
-                profile.setdefault("status", "Chua kiem tra")
-                profile.setdefault("last_check", None)
-                self.profile_ready.emit(self.email, profile)
-                profile.setdefault("status", "Chưa kiểm tra")
-                profile.setdefault("last_check", None)
-                self.result_ready.emit(self.email, True, "Đăng nhập thành công")
+            redirect = login_payload.get("redirect") or login_payload.get("redirect_no-cache") or ""
+            profile = {"email": self.email, "password": self.password}
+            handoff = inspect_login_handoff(session, headers, redirect, language)
+            handoff_status = handoff.get("profile_fetch_status")
+            profile.update({key: value for key, value in handoff.items()
+                            if key != "profile_fetch_status"})
+
+            self.progress.emit(85)
+            # Handoff fail không đồng nghĩa Parks2 không dùng được: luôn thử đọc mypage.
+            member_profile = fetch_member_profile(session, headers)
+            if member_profile:
+                profile.update(member_profile)
+                profile["profile_fetch_status"] = "Profile loaded from Parks2"
+                if handoff_status:
+                    profile["parks2_handoff_status"] = handoff_status
             else:
-                error_msg = response_data.get("msg", "Lỗi không xác định")
-                self.result_ready.emit(self.email, False, f"Đăng nhập thất bại: {error_msg}")
-            
+                profile["profile_fetch_status"] = (
+                    handoff_status or "Parks2 login complete; no profile fields were parsed"
+                )
+            profile.setdefault("status", "Chưa kiểm tra")
+            profile.setdefault("last_check", None)
+            self.profile_ready.emit(self.email, profile)
+
+            if member_profile:
+                self.result_ready.emit(
+                    self.email, True,
+                    f"Đăng nhập thành công - đọc được {len(member_profile)} trường hồ sơ")
+            else:
+                self.result_ready.emit(
+                    self.email, True, "Đăng nhập thành công nhưng chưa đọc được hồ sơ")
             self.progress.emit(100)
-            
-        except Exception as e:
-            self.result_ready.emit(self.email, False, f"Lỗi: {str(e)}")
+        except Exception as exc:
+            self.result_ready.emit(self.email, False, f"Lỗi: {exc}")
+
+    @staticmethod
+    def _json(response):
+        try:
+            return response.json()
+        except ValueError:
+            return {"result": "NG", "data": {"msg": "Phản hồi không phải JSON"}}
 
     def stop(self):
         self._is_running = False
@@ -2063,10 +2125,33 @@ class AccountManager(QMainWindow):
             try:
                 with open(DATA_FILE, 'r', encoding='utf-8') as f:
                     self.accounts = json.load(f)
+                migrated = self.migrate_split_passwords()
                 self.log(f"Đã tải {len(self.accounts)} tài khoản từ file")
+                if migrated:
+                    self.log(f"Đã sửa {migrated} tài khoản bị lưu mật khẩu kèm token (định dạng email|password|token)")
+                    self.save_data()
                 self.update_table()
             except Exception as e:
                 self.log(f"Lỗi tải dữ liệu: {e}")
+
+    def migrate_split_passwords(self):
+        """
+        Tách token ra khỏi mật khẩu cho dữ liệu đã lưu trước đây.
+
+        Bản cũ nhập bằng `split('|', 1)` nên mật khẩu chứa luôn phần token phía sau,
+        khiến server từ chối credentials của mọi tài khoản.
+        """
+        migrated = 0
+        for account in self.accounts:
+            password = account.get("password") or ""
+            if "|" not in password:
+                continue
+            head, _, tail = password.partition("|")
+            account["password"] = head
+            if tail and not account.get("token"):
+                account["token"] = tail
+            migrated += 1
+        return migrated
 
     def save_data(self):
         try:
@@ -2100,17 +2185,10 @@ class AccountManager(QMainWindow):
         skipped = 0
         
         for line in lines:
-            line = line.strip()
-            if not line or '|' not in line:
+            account = parse_account_line(line)
+            if account is None:
                 continue
-            
-            parts = line.split('|', 1)
-            if len(parts) != 2:
-                continue
-            
-            email, password = parts[0].strip(), parts[1].strip()
-            
-            if self.add_single_account(email, password):
+            if self.add_single_account(account["email"], account["password"], account.get("token")):
                 added += 1
             else:
                 skipped += 1
@@ -2124,18 +2202,21 @@ class AccountManager(QMainWindow):
             f"Đã thêm: {added} tài khoản\nBỏ qua (trùng): {skipped} tài khoản"
         )
 
-    def add_single_account(self, email, password):
+    def add_single_account(self, email, password, token=None):
         # Kiểm tra trùng lặp
         for acc in self.accounts:
             if acc['email'] == email:
                 return False
         
-        self.accounts.append({
+        account = {
             'email': email,
             'password': password,
             'status': 'Chưa kiểm tra',
             'last_check': None
-        })
+        }
+        if token:
+            account['token'] = token
+        self.accounts.append(account)
         return True
 
     def import_from_txt(self):
@@ -2154,17 +2235,10 @@ class AccountManager(QMainWindow):
             skipped = 0
             
             for line in lines:
-                line = line.strip()
-                if not line or '|' not in line:
+                account = parse_account_line(line)
+                if account is None:
                     continue
-                
-                parts = line.split('|', 1)
-                if len(parts) != 2:
-                    continue
-                
-                email, password = parts[0].strip(), parts[1].strip()
-                
-                if self.add_single_account(email, password):
+                if self.add_single_account(account["email"], account["password"], account.get("token")):
                     added += 1
                 else:
                     skipped += 1
@@ -2421,16 +2495,13 @@ class AccountManager(QMainWindow):
         added = skipped = bad = 0
         seen = set()
         for line in text.split("\n"):
-            line = line.strip()
-            if not line:
+            account = parse_account_line(line)
+            if account is None:
+                if line.strip():
+                    bad += 1
                 continue
-            if "|" not in line:
-                bad += 1
-                continue
-            email, password = (part.strip() for part in line.split("|", 1))
-            if not email or not password:
-                bad += 1
-            elif email in existing or email in seen:
+            email = account["email"]
+            if email in existing or email in seen:
                 skipped += 1
             else:
                 seen.add(email)
@@ -2520,7 +2591,10 @@ class AccountManager(QMainWindow):
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
                 for acc in self.accounts:
-                    f.write(f"{acc['email']}|{acc['password']}\n")
+                    line = f"{acc['email']}|{acc['password']}"
+                    if acc.get("token"):
+                        line += f"|{acc['token']}"
+                    f.write(line + "\n")
             
             self.log(f"Đã export {len(self.accounts)} tài khoản")
             QMessageBox.information(self, "Hoàn tất", f"Đã export đến:\n{file_path}")

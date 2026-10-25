@@ -323,14 +323,43 @@ Keys QSettings: `proxy_file`, `proxy_enabled`, `proxy_mode`.
 
 ```
 1. progress 10  → session = new_session()
-2. progress 30  → GET LOGIN_URL?client_id&redirect_uri   (lấy cookie `language`)
-3. progress 50  → POST {API_URL}v3/login/idpw           (form: login_id, password, env_info…)
-                  → result == "OK" ?
-                    ├─ cookie từ response → session.cookies
-                    ├─ inspect_login_handoff()  (mục 5.1)
-                    └─ fetch_member_profile()   (mục 5.2)
-4. progress 100
+2. progress 25  → GET LOGIN_URL?client_id&redirect_uri
+                  + tự set cookie `language` (getLanguage() của site luôn ghi cookie này)
+3. progress 40  → GET {API_URL}v3/login/init   → apply_response_cookies()
+                  (cấp cookie `challengeProd`; BỎ BƯỚC NÀY thì Parks2 không trả
+                   btn-next và không bao giờ đọc được hồ sơ)
+4. progress 55  → POST {API_URL}v3/login/idpw  (login_id, password, env_info, cookie…)
+5. progress 70  → describe_login_error(payload)  (mục 5.0)
+                    ├─ có lỗi  → result_ready(False, lỗi) và DỪNG ở đây
+                    └─ không lỗi → inspect_login_handoff()  (mục 5.1)
+                                    → fetch_member_profile() (mục 5.2)
+6. progress 100
 ```
+
+### 5.0 `result == "OK"` KHÔNG có nghĩa là đăng nhập được
+
+Đây là bug đã gây ra hiện tượng "đăng nhập thành công nhưng không đọc được hồ sơ".
+Server trả `result: "OK"` cho mọi request được xử lý, kể cả khi sai mật khẩu:
+
+| Tình huống | `result` | `input_error` | `redirect` |
+|---|---|---|---|
+| Sai email/mật khẩu | `OK` | có `error_msg.other` (tiếng Nhật) | **không có** |
+| Đúng credentials, env_info sai | `NG` | null | `…/error.html` |
+| Đúng credentials, đúng env_info | `OK` | null | `passkeyInfo.html?...&code=…` |
+
+`describe_login_error(payload)` là hàm duy nhất quyết định thành/bại: kiểm tra
+`result`, rồi `input_error.error_msg`, rồi redirect phải tồn tại và không phải
+`error.html`. `LOGIN_ERROR_TRANSLATIONS` dịch hai câu tiếng Nhật hay gặp nhất sang
+tiếng Việt để log dễ đọc. **Đừng** quay lại so `result == "OK"`.
+
+### 5.0.1 Định dạng dữ liệu tài khoản
+
+List tài khoản là `email|password|token` (3 trường). `parse_account_line()` tách theo
+**từng dấu `|`**: email = trường 1, password = trường 2, token = phần còn lại.
+Bản cũ dùng `split('|', 1)` nên mật khẩu bị dính luôn token (`Letuemy…|k1gx82rp`) →
+mọi tài khoản đều sai credentials. `migrate_split_passwords()` trong `load_data()`
+sửa một lần cho dữ liệu đã lưu và chuyển phần thừa sang key `token`;
+`export_accounts()` ghi lại đủ 3 trường để round-trip không mất dữ liệu.
 
 ### 5.1 Parks2 handoff — `inspect_login_handoff()`
 
@@ -340,7 +369,7 @@ Mục tiêu: hoàn tất đăng nhập Parks2 **không tạo passkey**.
 redirect URL từ server → parse code
   → GET v3/passkey/info?client_id&code&...    (X-Requested-With: XMLHttpRequest)
   → result != "OK"              → profile_fetch_status = "Could not complete..."
-  → đặt cookie từ response (có `value` = set, thiếu = xoá)
+  → apply_response_cookies()    (có `value` = set, thiếu = xoá)
   → data.btn.btn-next.url      → GET url (Accept HTML) → phải về parks2.bandainamco-am.co.jp
 ```
 
@@ -359,10 +388,13 @@ GET parks2.bandainamco-am.co.jp/member_mypage.html
 
 Nhãn Nhật được map sang key tiếng Anh trong `field_map`. Điểm hiểm: `points` phải
 trích bằng regex trên text đã bỏ tag vì nó nằm ngoài cặp `dt/dd`.
+Tài khoản thật đã kiểm chứng trả về 16 trường (kanji/kana, nickname, giới tính, địa
+chỉ, điện thoại, điểm, trạng thái BNID…).
 
 ### 5.3 Đổi tên — `change_name.py`
 
-`change_name()` làm lại đúng 3 bước đầu của login flow, rồi:
+`change_name()` làm lại đúng 4 bước đầu của login flow (login page → init → idpw →
+handoff), rồi:
 
 ```
 GET  member_regist.html?request=edit    → đọc hidden input + form action
@@ -374,16 +406,18 @@ Kết quả được đo thành công khi status 200 và HTML **không chứa** 
 **Rủi ro đã biết:** cả hai bước đều dựa vào regex trên HTML, nên site đổi layout là
 gãy. Nếu cần sửa, hãy kiểm tra lại form action và tên hidden input trước.
 
-### 5.4 env_info phải khớp User-Agent
+### 5.4 env_info phải đúng dạng của site
+
+`getEnvInfo()` trong `js/webauthn-client.js` chỉ trả về **hai** trường, lấy từ
+`navigator.userAgentData`:
 
 ```python
-env_info = json.dumps({"ua": USER_AGENT, "lang": language, "plat": "Win32",
-                       "sw": 1920, "sh": 1080}, separators=(',', ':'))
+ENV_INFO = json.dumps({"mobile": False, "platform": "Windows"}, separators=(",", ":"))
 ```
 
-`USER_AGENT` là hằng số duy nhất, dùng cho cả header lẫn `env_info.ua`.
-Trước đây hai chỗ gõ lệch nhau (`env_info.ua` thiếu `Chrome/120.0.0.0 Safari/537.36`)
-— client tự mâu thuẫn về thiết bị của mình là dấu hiệu dễ bị chặn.
+Dạng cũ `{ua, lang, plat, sw, sh}` là tự bịa; server không nhận và trả
+`result: NG` kèm `data.msg = "bnidv3 auth_sns_user get {'title': 'BadRequest', 'status': 400…}"`
+rồi redirect về `error.html`. `USER_AGENT` vẫn là hằng số duy nhất cho **header**.
 
 ---
 
@@ -468,7 +502,7 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 
 | Hạng mục | Commit | Ghi chú |
 |---|---|---|
-| Thêm/nhập/xuất tài khoản | `329f7e1` | Nhập dán `email\|password` hoặc file TXT |
+| Thêm/nhập/xuất tài khoản | `329f7e1` | Nhập dán `email\|password\|token` hoặc file TXT |
 | Đăng nhập + Parks2 handoff | `4079c14`, `4579c2c` | Không tạo passkey |
 | Parse hồ sơ từ mypage | `7f173c5`, `7c7d171` | Fallback sang edit form |
 | Sửa 2 trường tên Kanji | `c0d1bdc` | Không sửa ngày sinh (đã gỡ) |
@@ -478,7 +512,10 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 | Trạng thái + lọc + cảnh báo chiến dịch | xem git log | Tính từ ngày, không nhập tay |
 | Đăng ký thủ công + ghi nhận tài khoản | xem git log | Mở link + clipboard, người dùng tự submit |
 | Proxy cho mọi request | `6ccd2d3` | + tab Cấu hình, kiểm tra proxy |
-| env_info khớp User-Agent | `10d8598` | |
+| env_info đúng schema của site | xem git log | `{mobile, platform}` — mục 5.4 |
+| Thêm bước `v3/login/init` | xem git log | cấp cookie challenge cho handoff |
+| `describe_login_error()` thay cho `result=="OK"` | xem git log | hết báo "thành công" giả |
+| Tách đúng `email\|password\|token` + migrate | xem git log | 422 tài khoản từng lưu mật khẩu sai |
 | Màu cột Status | `10d8598` | Sửa bug so chuỗi không dấu |
 | Nút compact tab Nhập | `20d5914` | 4 nút một hàng |
 | Chủ đề sáng/tối, cỡ chữ | `717533c` | QSettings |
@@ -514,12 +551,17 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 ## 10. Ràng buộc không được phá vỡ
 
 1. Không thêm Selenium/Playwright — luồng hiện tại bằng `requests` là cố ý.
+   Đã kiểm chứng 2026-10-25: lỗi "không đọc được hồ sơ" **không** phải do thiếu
+   trình duyệt. Nguyên nhân thật là mật khẩu lưu sai dạng `email|password|token`,
+   `env_info` sai schema, và code chỉ tin `result == "OK"`. Sau khi sửa, requests
+   thuần lấy đủ 16 trường hồ sơ. Đừng quay lại hướng browser automation.
 2. Không random `CLIENT_ID`, không bỏ qua `redirect_uri`.
 3. Không commit secret (`accounts_data.json`, `proxy.txt`).
 4. Mọi network call phải qua `new_session()` để còn dùng được proxy.
 5. Mọi network call trên UI phải bọc trong `QThread`.
 6. Style widget tĩnh phải khai báo trong `apply_styles()` qua `objectName`.
-7. `USER_AGENT` là nguồn duy nhất cho cả header lẫn `env_info.ua`.
+7. `USER_AGENT` là nguồn duy nhất cho header HTTP. `ENV_INFO` là nguồn duy nhất cho
+   trường `env_info` và phải giữ đúng dạng `{mobile, platform}` (mục 5.4).
 8. Chỉ sửa `last_name_kanji` / `first_name_kanji` qua `AccountDetailsDialog`.
 9. Không viết automation tự điền form và submit đăng ký hàng loạt vào trang 抽選.
    Đã trình bày với người dùng và được xác nhận giữ nguyên quan điểm này. Phần được

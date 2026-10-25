@@ -20,9 +20,11 @@ LOGIN_URL = "https://account.bandainamcoid.com/login.html"
 CLIENT_ID = "namcoparks_onlinestore"
 REDIRECT_URI = "https://parks2.bandainamco-am.co.jp/member_regist_new.html?backto=top"
 MEMBER_REGIST_URL = "https://parks2.bandainamco-am.co.jp/member_regist.html?request=edit"
-# env_info.ua phải khớp chính xác header User-Agent, nếu không client tự mâu thuẫn về thiết bị của mình
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+# env_info là thông tin thiết bị mà JS của site lấy từ navigator.userAgentData
+# (getEnvInfo() trong webauthn-client.js). Site chỉ chấp nhận đúng 2 trường này.
+ENV_INFO = json.dumps({"mobile": False, "platform": "Windows"}, separators=(",", ":"))
 
 
 def complete_parks2_handoff(session, headers, redirect_url, language):
@@ -109,15 +111,24 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
             "redirect_uri": REDIRECT_URI,
         }
         session.get(LOGIN_URL, params=login_params, headers=headers, timeout=30)
-        language = session.cookies.get("language", "ja")
+        language = session.cookies.get("language") or "ja"
+        session.cookies.set("language", language, domain=".bandainamcoid.com", path="/")
 
-        env_info = json.dumps({
-            "ua": USER_AGENT,
-            "lang": language,
-            "plat": "Win32",
-            "sw": 1920,
-            "sh": 1080,
-        }, separators=(',', ':'))
+        # init cấp cookie challenge; thiếu nó Parks2 không trả URL nối tiếp.
+        init_response = session.get(
+            f"{API_URL}v3/login/init",
+            params={
+                "client_id": CLIENT_ID, "redirect_uri": REDIRECT_URI, "customize_id": "",
+                "language": language, "prompt": "", "sns_not_found": "", "lockout_child": "",
+                "cookie": json.dumps({c.name: c.value for c in session.cookies}),
+                "backto": "", "response_type": "", "scope": "", "state": "", "nonce": "",
+            },
+            headers=headers, timeout=30)
+        for cookie_data in init_response.json().get("cookie", {}).values():
+            if cookie_data.get("name") and "value" in cookie_data:
+                kwargs = {k: cookie_data[k] for k in ("path", "domain") if cookie_data.get(k)}
+                kwargs.setdefault("path", "/")
+                session.cookies.set(cookie_data["name"], cookie_data["value"], **kwargs)
 
         login_data = {
             "client_id": CLIENT_ID,
@@ -126,10 +137,10 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
             "customize_id": "",
             "login_id": email,
             "password": password,
-            "env_info": env_info,
+            "env_info": ENV_INFO,
             "retention": 1,
             "language": language,
-            "cookie": json.dumps({}),
+            "cookie": json.dumps({c.name: c.value for c in session.cookies}),
             "prompt": "",
         }
 
@@ -142,8 +153,12 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
         
         response_data = response.json()
         
-        if response_data.get("result") != "OK":
-            return {"success": False, "message": f"Đăng nhập thất bại: {response_data.get('msg', 'Unknown error')}"}
+        # result == "OK" chỉ nghĩa là API xử lý được request; sai mật khẩu vẫn trả OK.
+        redirect_url = response_data.get("redirect") or response_data.get("redirect_no-cache") or ""
+        input_error = (response_data.get("input_error") or {}).get("error_msg") or {}
+        if response_data.get("result") != "OK" or input_error or not redirect_url or "error.html" in redirect_url:
+            reason = " ".join(str(value) for value in input_error.values()) if input_error else "Unknown error"
+            return {"success": False, "message": f"Đăng nhập thất bại: {reason}"}
         
         print("    ✓ Đăng nhập thành công")
         
@@ -154,7 +169,7 @@ def change_name(email, password, new_last_name, new_first_name=None, new_last_ka
                     kwargs = {k: cookie_data[k] for k in ("path", "domain") if cookie_data.get(k)}
                     session.cookies.set(cookie_data["name"], cookie_data["value"], **kwargs)
 
-        if not complete_parks2_handoff(session, headers, response_data.get("redirect", ""), language):
+        if not complete_parks2_handoff(session, headers, redirect_url, language):
             return {"success": False, "message": "Could not complete the Parks2 login handoff"}
         
     except Exception as e:
