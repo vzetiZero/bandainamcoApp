@@ -31,6 +31,7 @@ from app.domain.campaigns import (
     campaign_status, format_campaign_remaining, parse_campaign_time,
 )
 from app.infrastructure.bandai_auth import BandaiAuthClient
+from app.infrastructure.bandai_name import BandaiNameClient
 from app.ui.delegates import StatusDelegate
 from app.ui.table_spec import ACCOUNT_COLUMNS
 
@@ -309,39 +310,34 @@ class ChangeNameDialog(QDialog):
 # WORKER THREAD CHO ĐỔI TÊN
 # ============================================================
 class ChangeNameWorker(QThread):
-    """Thread thực hiện đổi tên để không block UI"""
+    """Thread đổi tên: logic nằm trong BandaiNameClient, lớp này chỉ đổi tín hiệu."""
     result_ready = Signal(str, bool, str)  # email, success, message
     progress = Signal(int)
 
-    def __init__(self, email, password, name_data):
+    def __init__(self, email, password, name_data, name_client=None):
         super().__init__()
         self.email = email
         self.password = password
         self.name_data = name_data
+        self.name_client = name_client or BandaiNameClient()
         self._is_running = True
 
     def run(self):
         try:
-            # Import change_name module
-            from change_name import change_name
-            
-            self.progress.emit(10)
-            
-            result = change_name(
-                email=self.email,
-                password=self.password,
-                new_last_name=self.name_data.get("last_name", ""),  # Preserve when blank
-                new_first_name=self.name_data.get("first_name", ""),
-                new_last_kana="",  # Không đổi họ kana
-                new_first_kana="",  # Không đổi tên kana
-                new_nickname="",
+            outcome = self.name_client.change_names(
+                self.email,
+                self.password,
+                # Bỏ trống nghĩa là giữ giá trị hiện tại trên trang, không phải xoá.
+                self.name_data.get("last_name", ""),
+                self.name_data.get("first_name", ""),
+                on_progress=self.progress.emit,
             )
-            
-            self.progress.emit(100)
-            self.result_ready.emit(self.email, result["success"], result["message"])
-            
-        except Exception as e:
-            self.result_ready.emit(self.email, False, f"Lỗi: {str(e)}")
+        except Exception as exc:
+            self.result_ready.emit(self.email, False, f"Lỗi: {exc}")
+            return
+        self.progress.emit(100)
+        message = "Đổi tên thành công!" if outcome.success else outcome.message
+        self.result_ready.emit(self.email, outcome.success, message)
 
     def stop(self):
         self._is_running = False
@@ -465,6 +461,7 @@ class AccountManager(QMainWindow):
         self.ui_settings = self.container.settings
         self.account_repository = self.container.accounts
         self.auth_client = self.container.auth_client
+        self.name_client = self.container.name_client
         self.hidden_columns = set(self.ui_settings.get_json("hidden_account_columns", "[]"))
         self.sort_key = None
         self.sort_asc = True
@@ -2221,7 +2218,7 @@ class AccountManager(QMainWindow):
         self.progress_bar.setValue(0)
         
         self.pending_name_changes[acc['email']] = dict(name_data)
-        self.worker = ChangeNameWorker(acc['email'], acc['password'], name_data)
+        self.worker = ChangeNameWorker(acc['email'], acc['password'], name_data, self.name_client)
         self.worker.result_ready.connect(lambda email, success, msg: self.on_change_name_result(row, email, success, msg))
         self.worker.progress.connect(self.progress_bar.setValue)
         self.worker.start()

@@ -11,6 +11,7 @@ import requests
 from app.config import DATA_FILE
 from app.infrastructure.account_repository import AccountRepository
 from app.infrastructure.bandai_auth import BandaiAuthClient
+from app.infrastructure.bandai_name import BandaiNameClient
 from app.infrastructure.settings_store import SettingsStore
 from proxy_manager import new_session
 
@@ -18,6 +19,7 @@ from proxy_manager import new_session
 @dataclass
 class Container:
     auth_client: BandaiAuthClient
+    name_client: BandaiNameClient
     accounts: AccountRepository
     settings: SettingsStore
 
@@ -27,8 +29,10 @@ def build_container(data_file: str = DATA_FILE,
                     on_log: Optional[Callable[[str], None]] = None,
                     settings: Optional[SettingsStore] = None) -> Container:
     factory = session_factory or new_session
+    auth_client = BandaiAuthClient(session_factory=factory)
     return Container(
-        auth_client=BandaiAuthClient(session_factory=factory),
+        auth_client=auth_client,
+        name_client=BandaiNameClient(auth_client=auth_client),
         accounts=AccountRepository(path=data_file, on_change=on_log),
         settings=settings or SettingsStore(),
     )
