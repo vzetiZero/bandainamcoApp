@@ -1,5 +1,6 @@
 """Hằng số mạng và đường dẫn dùng chung cho toàn ứng dụng."""
 import json
+import os
 
 
 API_URL = "https://account-api.bandainamcoid.com/"
@@ -12,6 +13,8 @@ ACCOUNT_ORIGIN = "https://account.bandainamcoid.com"
 # Cookie language phải đặt ở miền gốc: account-api là subdomain khác với
 # account, đặt cookie theo account sẽ không gửi tới account-api.
 ACCOUNT_COOKIE_DOMAIN = ".bandainamcoid.com"
+APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ICONS_DIR = os.path.join(APP_ROOT, "icons")
 DATA_FILE = "accounts_data.json"
 PROXY_FORMAT_HINT = "ip:port:username:pass"
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "

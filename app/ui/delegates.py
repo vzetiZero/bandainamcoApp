@@ -1,7 +1,9 @@
 """Delegate vẽ cột Status thành badge bo tròn."""
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
+from PySide6.QtCore import Qt, QRectF
+from PySide6.QtGui import QBrush, QColor, QPainter, QPen
+from PySide6.QtWidgets import (
+    QApplication, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
+)
 
 
 STATUS_BADGE_COLORS = {
