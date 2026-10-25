@@ -9,7 +9,7 @@ import sys
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-from app.domain.names import NAME_FIELDS, kanji_overrides
+from app.domain.names import kanji_overrides
 from app.infrastructure.bandai_name import BandaiNameClient
 
 
@@ -42,24 +42,14 @@ def main():
     print("=" * 60)
     print("ĐỔI TÊN TÀI KHOẢN NAMCO PARKS")
     print("=" * 60)
-
-    client = BandaiNameClient()
-    print("\n[1/3] Đăng nhập và mở trang sửa hồ sơ...")
-    session, headers, form, message = client.open_edit_page(
-        args.email, args.password, on_progress=lambda percent: print(f"    ... {percent}%"))
-    if form is None:
-        print(f"\n✗ THẤT BẠI: {message}")
-        return 1
-    print("    ✓ Đăng nhập + handoff Parks2 thành công")
-
-    print("\n[2/3] Giá trị hiện tại:")
-    for field in NAME_FIELDS:
-        print(f"    {field}: {form.current(field)}")
-
-    print("\n[3/3] Gửi form...")
-    outcome = client.submit(session, headers, form, overrides)
     for field, value in overrides.items():
-        print(f"    {field} -> {value}")
+        print(f"  {field} -> {value}")
+
+    # change_profile chạy trọn hai bước confirm/execute rồi đọc lại trang để xác minh;
+    # gửi riêng bước một (submit) thì tên chưa đổi.
+    outcome = BandaiNameClient().change_profile(
+        args.email, args.password, overrides,
+        on_progress=lambda percent: print(f"  ... {percent}%"))
 
     print("\n" + "=" * 60)
     print("✓ THÀNH CÔNG!" if outcome.success else "✗ THẤT BẠI!")

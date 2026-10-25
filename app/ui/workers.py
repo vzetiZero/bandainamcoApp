@@ -2,6 +2,7 @@
 import time
 from PySide6.QtCore import Qt, QThread, Signal
 
+from app.domain.names import kanji_overrides
 from app.infrastructure.bandai_auth import BandaiAuthClient
 from app.infrastructure.bandai_name import BandaiNameClient
 from proxy_manager import TEST_TIMEOUT, check_all_proxies
@@ -141,12 +142,12 @@ class ChangeNameWorker(QThread):
 
     def run(self):
         try:
-            outcome = self.name_client.change_names(
+            outcome = self.name_client.change_profile(
                 self.email,
                 self.password,
                 # Bỏ trống nghĩa là giữ giá trị hiện tại trên trang, không phải xoá.
-                self.name_data.get("last_name", ""),
-                self.name_data.get("first_name", ""),
+                kanji_overrides(self.name_data.get("last_name", ""),
+                                self.name_data.get("first_name", "")),
                 on_progress=self.progress.emit,
             )
         except Exception as exc:

@@ -7,7 +7,7 @@ from urllib.parse import urljoin
 import requests
 
 from app.config import PARKS2_HOST
-from app.domain.names import NameForm, kanji_overrides
+from app.domain.names import NameForm
 from app.infrastructure.bandai_auth import BandaiAuthClient
 from app.infrastructure.bandai_profile import REQUEST_TIMEOUT, complete_parks2_handoff
 
@@ -162,10 +162,10 @@ class BandaiNameClient:
         outcome.form = parse_name_form(response.text, response.url, CONFIRM_FORM)
         return outcome
 
-    def change_names(self, email: str, password: str, last_name: str = "", first_name: str = "",
-                     on_progress: Optional[Callable[[int], None]] = None) -> NameOutcome:
+    def change_profile(self, email: str, password: str, overrides: Dict[str, str],
+                       on_progress: Optional[Callable[[int], None]] = None) -> NameOutcome:
         """
-        Đổi hai trường tên Kanji, giữ nguyên kana và nickname.
+        Gửi các override rồi đọc lại trang để xác minh, vì site không báo "đã lưu".
 
         Để trống một trường nghĩa là giữ giá trị cũ (NameForm lo phần đó).
         """
@@ -173,9 +173,8 @@ class BandaiNameClient:
         session, headers, form, message = self.open_edit_page(email, password, report)
         if form is None:
             return NameOutcome(False, message, None)
-        overrides = kanji_overrides(last_name, first_name)
         payload = form.form_data(overrides)
-        wanted = (payload["L_NAME"], payload["F_NAME"])
+        wanted = {field: payload[field] for field in overrides}
 
         report(75)
         confirm = self.submit(session, headers, form, overrides)
@@ -187,14 +186,17 @@ class BandaiNameClient:
         if not executed.success:
             return NameOutcome(False, executed.message, form)
 
-        # Site không báo "đã lưu" rõ ràng: đọc lại trang để kiểm chứng tên mới.
         report(94)
         recheck, message = self.read_form(session, headers)
         if recheck is None:
-            return NameOutcome(True, "Đã gửi form đổi tên (không đọc lại được trang)", form)
-        if (recheck.last_name, recheck.first_name) != wanted:
+            return NameOutcome(True, "Đã gửi form (không đọc lại được trang)", form)
+        unchanged = {field: value for field, value in wanted.items()
+                     if recheck.current(field) != value}
+        if unchanged:
             return NameOutcome(
                 False,
-                f"Tên trên trang vẫn là {recheck.last_name} {recheck.first_name}", recheck)
+                "Trang vẫn hiển thị: " + ", ".join(f"{name}={value}"
+                                                   for name, value in unchanged.items()),
+                recheck)
         report(100)
-        return NameOutcome(True, "Đổi tên đã được lưu", recheck)
+        return NameOutcome(True, "Đổi thông tin đã được lưu", recheck)
