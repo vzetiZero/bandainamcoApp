@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox, QProgressBar,
     QMenu, QFrame, QComboBox, QCheckBox, QDialog, QDialogButtonBox, QFormLayout,
     QTabWidget, QGroupBox, QSizePolicy, QAbstractItemView, QMainWindow, QStatusBar,
-    QToolBar, QApplication,
+    QToolBar, QApplication, QSpinBox,
 )
 from PySide6.QtCore import Qt, QTimer, QSize, QEvent
 from PySide6.QtGui import QAction, QIcon, QFont, QColor, QPixmap, QShortcut, QKeySequence
@@ -14,7 +14,7 @@ from PySide6.QtGui import QAction, QIcon, QFont, QColor, QPixmap, QShortcut, QKe
 from icon_helper import load_svg_icon, AppIcons
 from proxy_manager import MODE_PER_REQUEST, MODE_PER_SESSION, PROXY_FILE, proxy_manager
 
-from app.config import ICONS_DIR, PROXY_FORMAT_HINT
+from app.config import DEFAULT_CONCURRENCY, ICONS_DIR, MAX_CONCURRENCY, PROXY_FORMAT_HINT
 from app.container import build_container
 from app.services.campaign_service import CampaignService
 from app.domain.campaigns import (
@@ -22,10 +22,10 @@ from app.domain.campaigns import (
     CAMPAIGN_STATUS_NOT_STARTED, CAMPAIGN_STATUS_OPEN, CAMPAIGN_STATUS_UNDETERMINED,
     campaign_status, format_campaign_remaining, parse_campaign_time,
 )
-from app.ui.delegates import StatusDelegate
+from app.ui.delegates import EmailProgressDelegate, StatusDelegate
 from app.ui.dialogs import AccountDetailsDialog, AddAccountDialog, CampaignDialog, ChangeNameDialog
 from app.ui.styles import build_stylesheet, read_appearance
-from app.ui.table_spec import ACCOUNT_COLUMNS
+from app.ui.table_spec import ACCOUNT_COLUMNS, EMAIL_COLUMN, PROGRESS_ROLE
 from app.ui.workers import BatchCheckWorker, ChangeNameWorker, LoginWorker, ProxyCheckWorker
 
 
@@ -50,6 +50,11 @@ class AccountManager(QMainWindow):
         self.hidden_columns = set(self.ui_settings.get_json("hidden_account_columns", "[]"))
         self.sort_key = None
         self.sort_asc = True
+        # email -> % đang xử lý của riêng tài khoản đó (chỉ sống lúc đang chạy)
+        self.row_progress = {}
+        self.max_workers = max(1, min(MAX_CONCURRENCY,
+                                      self.ui_settings.get_int("max_workers",
+                                                               DEFAULT_CONCURRENCY)))
         
         self.setup_ui()
         self.load_data()
@@ -339,8 +344,35 @@ class AccountManager(QMainWindow):
             self.proxy_table.horizontalHeader().setSectionResizeMode(col, mode)
         proxy_layout.addWidget(self.proxy_table, 1)
 
+        layout.addWidget(self._create_concurrency_group())
         layout.addWidget(proxy_group, 1)
         return tab
+
+    def _create_concurrency_group(self):
+        """Nhóm cấu hình số tài khoản xử lý cùng lúc khi kiểm tra hàng loạt."""
+        group = QGroupBox("Kiểm tra tài khoản")
+        form = QFormLayout(group)
+        hint = QLabel(
+            "Khi chạy nhiều tài khoản cùng lúc, mỗi tài khoản vẫn là một phiên đăng nhập "
+            "riêng (dùng proxy từ new_session()). Tăng số luồng thì nhanh hơn nhưng dồn "
+            "request vào site và proxy nhiều hơn."
+        )
+        hint.setWordWrap(True)
+        form.addRow(hint)
+
+        self.max_workers_input = QSpinBox()
+        self.max_workers_input.setRange(1, MAX_CONCURRENCY)
+        self.max_workers_input.setValue(self.max_workers)
+        self.max_workers_input.setSuffix(" luồng")
+        self.max_workers_input.setToolTip(f"Mặc định {DEFAULT_CONCURRENCY}, tối đa {MAX_CONCURRENCY}")
+        self.max_workers_input.valueChanged.connect(self.on_concurrency_changed)
+        form.addRow("Số luồng chạy đồng thời:", self.max_workers_input)
+        return group
+
+    def on_concurrency_changed(self, value):
+        self.max_workers = max(1, min(MAX_CONCURRENCY, int(value)))
+        self.ui_settings.set(max_workers=self.max_workers)
+        self.status_bar.showMessage(f"Số luồng đồng thời: {self.max_workers}", 3000)
 
     def load_proxy_settings(self):
         """Nạp cấu hình proxy đã lưu và đọc file proxy.txt."""
@@ -1001,6 +1033,8 @@ class AccountManager(QMainWindow):
         self.table.customContextMenuRequested.connect(self.show_context_menu)
         self.table.cellDoubleClicked.connect(self.show_account_details)
         self.table.setItemDelegateForColumn(2, StatusDelegate(self.table))
+        self.email_progress_delegate = EmailProgressDelegate(self.table)
+        self.table.setItemDelegateForColumn(EMAIL_COLUMN, self.email_progress_delegate)
         self.table.horizontalHeader().sectionClicked.connect(self.on_header_clicked)
         self.empty_label = QLabel(self.table)
         self.empty_label.setObjectName("emptyState")
@@ -1082,9 +1116,11 @@ class AccountManager(QMainWindow):
 
     def apply_styles(self):
         """Nối lại QSS từ app.ui.styles; widget tĩnh vẫn theo objectName."""
+        appearance = read_appearance(self.ui_settings)
         for widget in self.findChildren(QWidget):
             widget.setStyleSheet("")
-        self.setStyleSheet(build_stylesheet(**read_appearance(self.ui_settings)))
+        self.email_progress_delegate.set_accent(appearance["accent"])
+        self.setStyleSheet(build_stylesheet(**appearance))
 
     def open_appearance_settings(self):
         dialog = QDialog(self)
@@ -1250,14 +1286,15 @@ class AccountManager(QMainWindow):
         self.progress_bar.setMaximum(len(targets))
         self.progress_bar.setValue(0)
 
-        worker = BatchCheckWorker(targets, self.auth_client)
+        worker = BatchCheckWorker(targets, self.auth_client, max_workers=self.max_workers)
         worker.result_ready.connect(self.on_check_result)
         worker.profile_ready.connect(self.on_profile_ready)
+        worker.account_progress.connect(self.set_row_progress)
         worker.progress.connect(self.on_check_progress)
         worker.finished_checking.connect(self.on_check_finished)
         self.start_worker(worker)
 
-        self.log(f"Bắt đầu kiểm tra {label} ({len(targets)})...")
+        self.log(f"Bắt đầu kiểm tra {label} ({len(targets)}) với {self.max_workers} luồng...")
 
     def check_first_account(self):
         if not self.accounts:
@@ -1279,13 +1316,15 @@ class AccountManager(QMainWindow):
         worker.result_ready.connect(lambda email, success, msg: self.on_single_result(index, email, success, msg))
         worker.profile_ready.connect(self.on_profile_ready)
         worker.progress.connect(self.progress_bar.setValue)
+        worker.progress.connect(lambda percent, email=acc['email']: self.set_row_progress(email, percent))
         self.start_worker(worker)
         
         self.log(f"Đang kiểm tra: {acc['email']}")
 
     def on_single_result(self, index, email, success, message):
+        self.set_row_progress(email, 0)
         self.account_service.set_status(email, success)
-        self.update_table()
+        self.refresh_account_row(email)
         self.save_data()
         self.log(f"{email}: {message}")
         self.progress_bar.setVisible(False)
@@ -1298,7 +1337,7 @@ class AccountManager(QMainWindow):
         if not fields:
             return
         self.save_data()
-        self.update_table()
+        self.refresh_account_row(email)
         handoff_warning = profile.get("parks2_handoff_status")
         message = f"{email}: đã đọc được {fields} trường hồ sơ"
         if handoff_warning:
@@ -1320,18 +1359,21 @@ class AccountManager(QMainWindow):
                 self.execute_change_name(row, account, changed_name)
 
     def on_check_result(self, email, success, message):
+        self.set_row_progress(email, 0)
         self.account_service.set_status(email, success)
-        self.update_table()
+        self.refresh_account_row(email)
         self.log(f"{email}: {message}")
 
     def on_check_progress(self, current, total):
         self.progress_bar.setValue(current)
-        self.status_bar.showMessage(f"Đang kiểm tra: {current}/{total}")
+        self.status_bar.showMessage(f"Đang kiểm tra: {current}/{total} "
+                                    f"({self.max_workers} luồng)")
 
     def on_check_finished(self):
         self.progress_bar.setVisible(False)
         self.status_bar.showMessage("Hoàn tất kiểm tra")
         self.save_data()
+        self.row_progress.clear()
         self.update_table()
         self.log("Hoàn tất kiểm tra")
 
@@ -1352,10 +1394,58 @@ class AccountManager(QMainWindow):
                 else:
                     value = account.get(key)
                     value = "" if value is None else str(value)
-                self.table.setItem(row, column, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                if column == EMAIL_COLUMN:
+                    item.setData(PROGRESS_ROLE, self.row_progress.get(account.get("email"), 0))
+                self.table.setItem(row, column, item)
         self.stats_label.setText(f"{len(self.accounts)} accounts")
         self.update_dashboard()
         self.refresh_signup_accounts()
+        self.apply_filter()
+
+    def account_row(self, email):
+        """Index dòng của email (invariant: index list == index bảng), hoặc None."""
+        return next((row for row, account in enumerate(self.accounts)
+                     if account.get("email") == email), None)
+
+    def set_row_progress(self, email, percent):
+        """
+        Gắn % của một tài khoản vào đúng ô Email của nó rồi vẽ lại ô đó.
+
+        Không gọi update_table(): đang có nhiều tài khoản chạy song song nên mỗi lần
+        tick mà dựng lại cả bảng thì UI sẽ nghẹn.
+        """
+        if percent:
+            self.row_progress[email] = max(1, min(100, int(percent)))
+        else:
+            self.row_progress.pop(email, None)
+        row = self.account_row(email)
+        if row is None:
+            return
+        item = self.table.item(row, EMAIL_COLUMN)
+        if item is None:
+            return
+        item.setData(PROGRESS_ROLE, self.row_progress.get(email, 0))
+        self.table.viewport().update(self.table.visualRect(self.table.model().index(row, EMAIL_COLUMN)))
+
+    def refresh_account_row(self, email):
+        """Chỉ vẽ lại dòng của một tài khoản: dữ liệu mới + bar tiến trình của nó."""
+        row = self.account_row(email)
+        if row is None:
+            return
+        account = self.accounts[row]
+        for column, (label, key) in enumerate(ACCOUNT_COLUMNS):
+            if key == "__password__":
+                value = "********"
+            else:
+                value = account.get(key)
+                value = "" if value is None else str(value)
+            item = self.table.item(row, column) or QTableWidgetItem()
+            item.setText(value)
+            if column == EMAIL_COLUMN:
+                item.setData(PROGRESS_ROLE, self.row_progress.get(email, 0))
+            self.table.setItem(row, column, item)
+        self.update_dashboard()
         self.apply_filter()
 
     def update_dashboard(self):
@@ -1679,11 +1769,13 @@ class AccountManager(QMainWindow):
         worker = ChangeNameWorker(acc['email'], acc['password'], name_data, self.name_client)
         worker.result_ready.connect(lambda email, success, msg: self.on_change_name_result(row, email, success, msg))
         worker.progress.connect(self.progress_bar.setValue)
+        worker.progress.connect(lambda percent, email=acc['email']: self.set_row_progress(email, percent))
         self.start_worker(worker)
         
         self.log(f'\u0110ang c\u1eadp nh\u1eadt h\u1ed3 s\u01a1: {acc["email"]}')
 
     def on_change_name_result(self, row, email, success, message):
+        self.set_row_progress(email, 0)
         if success and email in self.pending_name_changes:
             changed = self.pending_name_changes.pop(email)
             account = next((item for item in self.accounts if item.get("email") == email), None)

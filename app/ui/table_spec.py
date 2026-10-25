@@ -1,4 +1,5 @@
 """Định nghĩa cột của bảng danh sách tài khoản."""
+from PySide6.QtCore import Qt
 
 
 # Cột của bảng tài khoản: (nhãn header, key trong dict account)
@@ -14,3 +15,8 @@ ACCOUNT_COLUMNS = [
     ("Points terms", "points_terms_status"), ("Profile access", "profile_fetch_status"),
     ("Gender code", "gender_code"),
 ]
+
+# Phần trăm đang xử lý của một tài khoản (0-100), gắn trên item cột Email để
+# EmailProgressDelegate tô bar; 0 hoặc thiếu nghĩa là không có tiến trình nào.
+PROGRESS_ROLE = Qt.UserRole + 1
+EMAIL_COLUMN = 0

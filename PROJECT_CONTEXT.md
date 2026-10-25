@@ -117,6 +117,16 @@ và đặt ở khung nhật ký bên phải bảng.
   (context menu, xóa, double-click đều đọc `self.accounts[row]`).
 - Cột Status vẽ badge bo tròn bởi `StatusDelegate` (màu từ `STATUS_BADGE_COLORS`, nền tint
   alpha 40 nên đúng cả theme sáng/tối); giá trị lạ fallback về vẽ mặc định.
+- **Tiến trình theo từng tài khoản**: cột Email (index 0) có `EmailProgressDelegate`.
+  `set_row_progress(email, percent)` ghi percent vào `self.row_progress` rồi đặt
+  `PROGRESS_ROLE` (khai báo ở `table_spec.py`) lên item Email và vẽ lại đúng ô đó bằng
+  `viewport().update(visualRect(index))` — không gọi `update_table()` (sẽ mất fill).
+  Delegate vẽ nền màu accent alpha 90 chiếm `percent` chiều rộng ô, text email elided bên
+  trái và `NN%` góc phải; `percent = 0` → trả về vẽ mặc định. Vì vậy khi kiểm tra song song
+  nhiều tài khoản, mỗi dòng tự cho biết tài khoản đó đang tới đâu.
+  `on_check_result`/`on_single_result` xoá fill (`set_row_progress(email, 0)`) trước khi ghi kết quả.
+- `refresh_account_row(email)` chỉ dựng lại một dòng (theo `account_row()`), dùng cho kết quả
+  kiểm tra/đổi tên đơn lẻ; `update_dashboard()` + `apply_filter()` vẫn chạy sau đó.
 - Trạng thái rỗng: `empty_label` phủ giữa bảng khi chưa có tài khoản hoặc không dòng nào
   khớp bộ lọc; geometry đồng bộ qua `eventFilter` bắt Resize của viewport.
 - Phím tắt: Ctrl+N mở dialog nhập, Ctrl+I import, Ctrl+F focus ô tìm kiếm,
@@ -140,6 +150,11 @@ và đặt ở khung nhật ký bên phải bảng.
 ### 2.3 Tab 3 — Chiến dịch (chi tiết ở mục 3)
 
 ### 2.4 Tab 4 — Cấu hình (chi tiết ở mục 4)
+
+Tab Cấu hình có nhóm **Kiểm tra đồng thời** (`_create_concurrency_group()`, `QSpinBox`
+`max_workers_input`, suffix " luồng", range `1..MAX_CONCURRENCY` ở `app/config.py`).
+`on_concurrency_changed()` gán ngay `self.max_workers` và ghi QSettings `max_workers`, nên
+lần chạy batch kế tiếp dùng đúng số luồng vừa chọn. Mặc định `DEFAULT_CONCURRENCY = 5`.
 
 ---
 
@@ -488,13 +503,24 @@ tự tạo — truyền client giả là test được worker mà không cần m
 | Worker | Signal | Dùng cho |
 |---|---|---|
 | `LoginWorker` | `result_ready(str,bool,str)`, `profile_ready(str,dict)`, `progress(int)` | 1 tài khoản; gọi `auth_client.authenticate()` rồi dịch `LoginOutcome` sang thông báo tiếng Việt |
-| `BatchCheckWorker` | `progress(int,int)`, `finished_check` | Cả danh sách, gọi `LoginWorker.run()` tuần tự, `time.sleep(0.5)` giữa các tài khoản |
-| `ChangeNameWorker` | `result_ready`, `progress` | Đổi tên; gọi `name_client.change_profile(..., kanji_overrides(last, first))` |
+| `BatchCheckWorker` | `result_ready`, `profile_ready`, `account_progress(str,int)`, `progress(int,int)`, `finished_checking` | Nhiều tài khoản **song song**: `ThreadPoolExecutor(max_workers=self.max_workers)` submit `_check_one` cho từng cặp email/password; `as_completed` tăng bộ đếm và emit `progress(completed, total)`. `max_workers` clamp `1..MAX_CONCURRENCY` ngay trong `__init__`. |
+| `ChangeNameWorker` | `result_ready`, `progress` | Đổi tên; gọi `name_client.change_profile(..., kanji_overrides(last, first), on_progress=self.progress.emit)` |
 | `ProxyCheckWorker` | `row_ready(int,bool,str)`, `finished_check` | Kiểm tra proxy song song |
 
 **Bẫy đã gặp:** `BatchCheckWorker` nối signal của `LoginWorker` con bằng
-`Qt.ConnectionType.DirectConnection` rồi gọi `run()` trực tiếp (không `start()`).
-Đừng đổi sang cách khác nếu chưa hiểu vì sao.
+`Qt.ConnectionType.DirectConnection` rồi gọi `run()` trực tiếp trong thread của pool (không
+`start()`). Tín hiệu vì vậy phát trên thread pool, nên handler phía UI chỉ được làm việc nhẹ
+(ghi dict + `viewport().update`) — muốn đổi sang `QueuedConnection` phải kiểm tra lại thứ tự
+`profile_ready`/`result_ready`.
+
+`_check_one` chuyển `LoginWorker.progress(int)` sang `account_progress(email, percent)` để
+fill của đúng dòng tài khoản (view nối vào `set_row_progress`).
+
+Hủy: `stop()` đặt `_is_running = False`; `run()` kết thúc bằng
+`pool.shutdown(wait=self._is_running, cancel_futures=not self._is_running)` — đang chạy thì
+chờ task hiện tại xong, bị stop thì hủy task còn xếp hàng. `_check_one` cũng kiểm tra
+`_is_running` nên tài khoản bị hủy không phát signal, không để lại fill trên dòng.
+`finished_checking` luôn emit sau khi pool đóng (view dùng nó để ẩn progress bar).
 
 **Worker phải được giữ tham chiếu:** mọi `worker.start()` đi qua `start_worker()` của view,
 thêm worker vào `self.workers` và tự gỡ khi thread phát `finished`. Trước đây worker chỉ nằm
@@ -520,6 +546,7 @@ vì `self.workers` luôn rỗng.
 | `compact` | bool | `False` |
 | `campaign_signups` | chuỗi JSON | `"{}"` — map `"tên\|link"` → danh sách `{email, at}` |
 | `hidden_account_columns` | chuỗi JSON | `"[]"` — tập key cột đang ẩn, `set_column_hidden()` ghi |
+| `max_workers` | int | `DEFAULT_CONCURRENCY` = **5**, clamp `1..MAX_CONCURRENCY` (10) khi đọc và khi ghi |
 
 UI/services không tự chạm `QSettings`; mọi reading/ghi đi qua `SettingsStore`
 (`get/get_bool/get_int/set`, `get_json/set_json`) và `Container.settings`.
@@ -595,6 +622,8 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 | Đổi tên qua form | `e65bc6f` | Regex trên HTML |
 | Lọc/tìm kiếm, context menu, export | `329f7e1` | |
 | Tab Chiến dịch | `86dcac5` | CRUD thủ công |
+| Context menu theo vùng chọn + confirm khi xóa | xem log | Kiểm tra/Copy/Xóa áp dụng cho **mọi** dòng đang chọn |
+| Fill tiến trình trong ô Email + kiểm tra đa luồng | xem log | `EmailProgressDelegate` + `PROGRESS_ROLE`; `BatchCheckWorker` dùng `ThreadPoolExecutor`, số luồng cấu hình được (mặc định 5) |
 | Trạng thái + lọc + cảnh báo chiến dịch | xem git log | Tính từ ngày, không nhập tay |
 | Đăng ký thủ công + ghi nhận tài khoản | xem git log | Mở link + clipboard, người dùng tự submit |
 | Proxy cho mọi request | `6ccd2d3` | + tab Cấu hình, kiểm tra proxy |
