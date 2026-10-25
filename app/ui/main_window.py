@@ -1685,6 +1685,13 @@ class AccountManager(QMainWindow):
             QMessageBox.critical(self, "Lỗi", f"Không thể export: {e}")
 
     def log(self, message):
+        # Đổ log request/proxy còn trong queue trước: dòng kết quả của tài khoản
+        # phải nằm SAU request vừa gây ra nó, không bị nhảy lên trước.
+        if getattr(self, "proxy_log_queue", None) is not None:
+            self.flush_proxy_log()
+        self._append_log(message)
+
+    def _append_log(self, message):
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_text.append(f"[{timestamp}] {message}")
 
@@ -1695,7 +1702,7 @@ class AccountManager(QMainWindow):
                 message = self.proxy_log_queue.get_nowait()
             except queue.Empty:
                 break
-            self.log(message)
+            self._append_log(message)
 
     def set_log_panel_visible(self, visible):
         """Nút trên toolbar bật/tắt bảng nhật ký; nhãn nút phản ánh thao tác kế tiếp."""
