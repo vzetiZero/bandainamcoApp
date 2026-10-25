@@ -1,6 +1,5 @@
 import os
 from datetime import datetime
-from urllib.parse import urlparse
 import webbrowser
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QTextEdit,
@@ -17,7 +16,7 @@ from proxy_manager import MODE_PER_REQUEST, MODE_PER_SESSION, PROXY_FILE, proxy_
 
 from app.config import ICONS_DIR, PROXY_FORMAT_HINT
 from app.container import build_container
-from app.domain.accounts import parse_account_line
+from app.services.campaign_service import CampaignService
 from app.domain.campaigns import (
     CAMPAIGN_SOON_WINDOW, CAMPAIGN_STATUS_CLOSED, CAMPAIGN_STATUS_COLORS,
     CAMPAIGN_STATUS_NOT_STARTED, CAMPAIGN_STATUS_OPEN, CAMPAIGN_STATUS_UNDETERMINED,
@@ -38,13 +37,13 @@ class AccountManager(QMainWindow):
         self.setMinimumSize(1400, 800)
         
         # Dữ liệu
-        self.accounts = []  # List of dict with all account fields
         self.workers = []
         self.pending_name_changes = {}
-        # Phụ thuộc hạ tầng đi qua chai: test truyền chai giả vào là chạy được.
+        # Phụ thuộc đi qua chai: test truyền chai giả (services + client giả) là chạy được.
         self.container = container or build_container(on_log=self.log)
         self.ui_settings = self.container.settings
-        self.account_repository = self.container.accounts
+        self.account_service = self.container.account_service
+        self.campaign_service = self.container.campaign_service
         self.auth_client = self.container.auth_client
         self.name_client = self.container.name_client
         self.hidden_columns = set(self.ui_settings.get_json("hidden_account_columns", "[]"))
@@ -54,6 +53,19 @@ class AccountManager(QMainWindow):
         self.setup_ui()
         self.load_data()
         self.apply_styles()
+
+    # View đọc dữ liệu qua services; không tự giữ bản sao danh sách.
+    @property
+    def accounts(self):
+        return self.account_service.accounts
+
+    @property
+    def campaigns(self):
+        return self.campaign_service.campaigns
+
+    @property
+    def campaign_signups(self):
+        return self.campaign_service.signups
 
     def setup_ui(self):
         # Central Widget
@@ -100,9 +112,8 @@ class AccountManager(QMainWindow):
         log_panel.setMinimumWidth(180)
         list_layout.addWidget(log_panel, 1)
         self.tab_widget.addTab(self.list_tab, load_svg_icon(AppIcons.FOLDER_OPEN, 16), "Danh sách tài khoản")
-        self.campaigns = []
+        # campaigns và campaign_signups thuộc CampaignService, đã load trong load_data.
         self.campaign_states = {}   # row -> trạng thái, để cảnh báo mở đăng ký đúng 1 lần
-        self.campaign_signups = {}  # "tên|link" -> [{email, at}] (ghi nhận thủ công)
         self.signup_account_emails = ()  # chữ ký danh sách tài khoản, để chỉ dựng combo khi đổi
         self.campaign_tab = self.create_campaign_tab()
         self.tab_widget.addTab(self.campaign_tab, load_svg_icon(AppIcons.CHECK, 16), "Chi\u1ebfn d\u1ecbch")
@@ -576,29 +587,19 @@ class AccountManager(QMainWindow):
         return row
 
     def save_campaigns(self):
-        self.ui_settings.set_json("campaigns", self.campaigns)
-        self.prune_orphan_signups()
+        self.campaign_service.save()
         self.refresh_campaign_table()
-
-    def prune_orphan_signups(self):
-        """Xoá ghi nhận của chiến dịch đã bị xoá, để dữ liệu không phình vô hạn."""
-        live_keys = {self.campaign_key(campaign) for campaign in self.campaigns}
-        stale = [key for key in self.campaign_signups if key not in live_keys]
-        for key in stale:
-            del self.campaign_signups[key]
-        if stale:
-            self.ui_settings.set_json("campaign_signups", self.campaign_signups)
 
     def add_campaign(self):
         dialog = CampaignDialog(parent=self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         campaign = dialog.get_campaign()
-        if not campaign["name"] or urlparse(campaign["url"]).scheme not in {"http", "https"}:
+        if not CampaignService.is_valid(campaign):
             QMessageBox.warning(self, "Thông tin chưa hợp lệ", "Nhập tên chiến dịch và link http:// hoặc https://.")
             return
-        self.campaigns.append(campaign)
-        self.save_campaigns()
+        self.campaign_service.add(campaign)
+        self.refresh_campaign_table()
 
     def edit_campaign(self):
         row = self.selected_campaign_row()
@@ -608,11 +609,11 @@ class AccountManager(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         campaign = dialog.get_campaign()
-        if not campaign["name"] or urlparse(campaign["url"]).scheme not in {"http", "https"}:
+        if not CampaignService.is_valid(campaign):
             QMessageBox.warning(self, "Thông tin chưa hợp lệ", "Nhập tên chiến dịch và link http:// hoặc https://.")
             return
-        self.campaigns[row] = campaign
-        self.save_campaigns()
+        self.campaign_service.update(row, campaign)
+        self.refresh_campaign_table()
 
     def open_campaign(self):
         row = self.selected_campaign_row()
@@ -628,8 +629,8 @@ class AccountManager(QMainWindow):
             self, "Xác nhận", "Xóa chiến dịch %s?" % name, QMessageBox.Yes | QMessageBox.No
         )
         if reply == QMessageBox.Yes:
-            del self.campaigns[row]
-            self.save_campaigns()
+            self.campaign_service.remove(row)
+            self.refresh_campaign_table()
 
 
     # ============================================================
@@ -638,19 +639,14 @@ class AccountManager(QMainWindow):
     @staticmethod
     def campaign_key(campaign):
         """Khoá ổn định của một chiến dịch, không đổi khi thứ tự dòng thay đổi."""
-        return "%s|%s" % (campaign.get("name", ""), campaign.get("url", ""))
-
-    def load_signups(self):
-        """Nạp danh sách tài khoản đã đăng ký từ QSettings."""
-        data = self.ui_settings.get_json("campaign_signups", "{}")
-        self.campaign_signups = data if isinstance(data, dict) else {}
+        return CampaignService.key(campaign)
 
     def save_signups(self):
-        self.ui_settings.set_json("campaign_signups", self.campaign_signups)
+        self.campaign_service.save_signups()
         self.refresh_campaign_table()
 
     def signups_for(self, campaign):
-        return list(self.campaign_signups.get(self.campaign_key(campaign), []))
+        return self.campaign_service.signups_for(campaign)
 
     def signup_count_text(self, campaign):
         count = len(self.signups_for(campaign))
@@ -740,13 +736,10 @@ class AccountManager(QMainWindow):
                                     "Chọn một tài khoản trong ô Tài khoản trước khi ghi nhận.")
             return
         campaign = self.campaigns[row]
-        key = self.campaign_key(campaign)
-        entries = self.campaign_signups.setdefault(key, [])
-        if any(entry.get("email") == email for entry in entries):
+        if not self.campaign_service.mark(campaign, email):
             self.status_bar.showMessage("%s đã có trong danh sách của chiến dịch này" % email, 5000)
             return
-        entries.append({"email": email, "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
-        self.save_signups()
+        self.refresh_campaign_table()
         message = "Đã ghi nhận %s cho chiến dịch %s" % (
             email, campaign.get("name") or "(chưa đặt tên)")
         self.status_bar.showMessage(message, 6000)
@@ -762,14 +755,10 @@ class AccountManager(QMainWindow):
         if not email:
             return
         campaign = self.campaigns[row]
-        key = self.campaign_key(campaign)
-        entries = [entry for entry in self.campaign_signups.get(key, [])
-                   if entry.get("email") != email]
-        if len(entries) == len(self.campaign_signups.get(key, [])):
+        if not self.campaign_service.unmark(campaign, email):
             self.status_bar.showMessage("%s chưa được ghi nhận cho chiến dịch này" % email, 5000)
             return
-        self.campaign_signups[key] = entries
-        self.save_signups()
+        self.refresh_campaign_table()
         message = "Đã bỏ ghi nhận %s khỏi chiến dịch %s" % (
             email, campaign.get("name") or "(chưa đặt tên)")
         self.status_bar.showMessage(message, 6000)
@@ -1231,25 +1220,16 @@ class AccountManager(QMainWindow):
     # DATA MANAGEMENT
     # ============================================================
     def load_data(self):
-        try:
-            self.campaigns = self.ui_settings.get_json("campaigns", "[]")
-            if not isinstance(self.campaigns, list):
-                self.campaigns = []
-            self.refresh_campaign_table()
-        except (TypeError, ValueError):
-            self.campaigns = []
-            self.refresh_campaign_table()
-        self.load_signups()
+        self.campaign_service.load()
         self.refresh_signup_accounts()
         self.refresh_campaign_table()
-        # Repository tự sửa dữ liệu mật khẩu dính token và báo qua self.log.
-        if self.account_repository.exists():
-            self.accounts = self.account_repository.load()
-            self.log(f"Đã tải {len(self.accounts)} tài khoản từ file")
+        total = self.account_service.load()
+        if total:
+            self.log(f"Đã tải {total} tài khoản từ file")
             self.update_table()
 
     def save_data(self):
-        self.account_repository.save(self.accounts)
+        self.account_service.save()
 
     # ============================================================
     # ACCOUNT OPERATIONS
@@ -1259,7 +1239,7 @@ class AccountManager(QMainWindow):
         if dialog.exec() == QDialog.Accepted:
             email, password = dialog.get_data()
             if email and password:
-                if self.add_single_account(email, password):
+                if self.account_service.add(email, password):
                     self.log(f"Đã thêm: {email}")
                     self.update_table()
                     self.save_data()
@@ -1270,19 +1250,8 @@ class AccountManager(QMainWindow):
             QMessageBox.warning(self, "Cảnh báo", "Vui lòng nhập dữ liệu!")
             return
         
-        lines = text.split('\n')
-        added = 0
-        skipped = 0
-        
-        for line in lines:
-            account = parse_account_line(line)
-            if account is None:
-                continue
-            if self.add_single_account(account["email"], account["password"], account.get("token")):
-                added += 1
-            else:
-                skipped += 1
-        
+        result = self.account_service.add_lines(text.split("\n"))
+        added, skipped = result["added"], result["skipped"]
         self.log(f"Thêm: {added} | Bỏ qua (trùng): {skipped}")
         self.update_table()
         self.save_data()
@@ -1292,22 +1261,6 @@ class AccountManager(QMainWindow):
             f"Đã thêm: {added} tài khoản\nBỏ qua (trùng): {skipped} tài khoản"
         )
 
-    def add_single_account(self, email, password, token=None):
-        # Kiểm tra trùng lặp
-        for acc in self.accounts:
-            if acc['email'] == email:
-                return False
-        
-        account = {
-            'email': email,
-            'password': password,
-            'status': 'Chưa kiểm tra',
-            'last_check': None
-        }
-        if token:
-            account['token'] = token
-        self.accounts.append(account)
-        return True
 
     def import_from_txt(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -1319,19 +1272,8 @@ class AccountManager(QMainWindow):
         
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            
-            added = 0
-            skipped = 0
-            
-            for line in lines:
-                account = parse_account_line(line)
-                if account is None:
-                    continue
-                if self.add_single_account(account["email"], account["password"], account.get("token")):
-                    added += 1
-                else:
-                    skipped += 1
+                result = self.account_service.add_lines(f.readlines())
+            added, skipped = result["added"], result["skipped"]
             
             self.log(f"Import: +{added} | Bỏ qua: {skipped}")
             self.update_table()
@@ -1361,14 +1303,10 @@ class AccountManager(QMainWindow):
         )
         
         if reply == QMessageBox.Yes:
-            # Xóa từ cuối lên để không lỗi index
-            for row in sorted(selected_rows, reverse=True):
-                if row < len(self.accounts):
-                    del self.accounts[row]
-            
+            removed = self.account_service.delete_rows(selected_rows)
             self.update_table()
             self.save_data()
-            self.log(f"Đã xóa {len(selected_rows)} tài khoản")
+            self.log(f"Đã xóa {removed} tài khoản")
 
     # ============================================================
     # CHECK ACCOUNTS
@@ -1420,8 +1358,7 @@ class AccountManager(QMainWindow):
         self.log(f"Đang kiểm tra: {acc['email']}")
 
     def on_single_result(self, index, email, success, message):
-        self.accounts[index]['status'] = "Hoạt động" if success else "Không hoạt động"
-        self.accounts[index]['last_check'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.account_service.set_status(email, success)
         self.update_table()
         self.save_data()
         self.log(f"{email}: {message}")
@@ -1430,26 +1367,17 @@ class AccountManager(QMainWindow):
             self.show_account_details(index)
 
     def on_profile_ready(self, email, profile):
-        for account in self.accounts:
-            if account.get("email") == email:
-                account.update(profile)
-                self.save_data()
-                self.update_table()
-                profile_fields = {
-                    key: value for key, value in profile.items()
-                    if key not in {"email", "password", "status", "last_check", "profile_fetch_status", "parks2_handoff_status"}
-                    and value not in (None, "")
-                }
-                if profile_fields:
-                    handoff_warning = profile.get("parks2_handoff_status")
-                    message = f"{email}: đã đọc được {len(profile_fields)} trường hồ sơ"
-                    if handoff_warning:
-                        message += f" (cảnh báo handoff: {handoff_warning})"
-                    self.log(message)
-                else:
-                    status = profile.get("profile_fetch_status", "Không có dữ liệu hồ sơ")
-                    self.log(f"{email}: đăng nhập thành công nhưng chưa đọc được hồ sơ ({status})")
-                return
+        """Gộp hồ sơ Parks2 vào tài khoản rồi báo số trường đọc được."""
+        fields = self.account_service.apply_profile(email, profile)
+        if not fields:
+            return
+        self.save_data()
+        self.update_table()
+        handoff_warning = profile.get("parks2_handoff_status")
+        message = f"{email}: đã đọc được {fields} trường hồ sơ"
+        if handoff_warning:
+            message += f" (cảnh báo handoff: {handoff_warning})"
+        self.log(message)
 
     def show_account_details(self, row, column=0):
         if row < 0 or row >= len(self.accounts):
@@ -1466,13 +1394,7 @@ class AccountManager(QMainWindow):
                 self.execute_change_name(row, account, changed_name)
 
     def on_check_result(self, email, success, message):
-        # Tìm account theo email
-        for acc in self.accounts:
-            if acc['email'] == email:
-                acc['status'] = "Hoạt động" if success else "Không hoạt động"
-                acc['last_check'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                break
-        
+        self.account_service.set_status(email, success)
         self.update_table()
         self.log(f"{email}: {message}")
 
@@ -1510,15 +1432,8 @@ class AccountManager(QMainWindow):
         self.apply_filter()
 
     def update_dashboard(self):
-        total = len(self.accounts)
-        active = sum(1 for acc in self.accounts if acc.get("status") == "Hoạt động")
-        inactive = sum(1 for acc in self.accounts if acc.get("status") == "Không hoạt động")
-        counts = {
-            "total": total,
-            "active": active,
-            "inactive": inactive,
-            "unchecked": total - active - inactive,
-        }
+        counts = self.account_service.counts()
+        active, inactive = counts["active"], counts["inactive"]
         for key, label in self.stat_values.items():
             label.setText(str(counts[key]))
         self.stats_chip.setText(
@@ -1578,23 +1493,10 @@ class AccountManager(QMainWindow):
         if not text:
             self.input_preview.setText("")
             return
-        existing = {acc["email"] for acc in self.accounts}
-        added = skipped = bad = 0
-        seen = set()
-        for line in text.split("\n"):
-            account = parse_account_line(line)
-            if account is None:
-                if line.strip():
-                    bad += 1
-                continue
-            email = account["email"]
-            if email in existing or email in seen:
-                skipped += 1
-            else:
-                seen.add(email)
-                added += 1
+        counts = self.account_service.preview(text.split("\n"))
         self.input_preview.setText(
-            f"Sẽ thêm: {added} · Trùng: {skipped} · Sai định dạng: {bad}"
+            f"Sẽ thêm: {counts['added']} · Trùng: {counts['skipped']} "
+            f"· Sai định dạng: {counts['bad']}"
         )
 
     def eventFilter(self, obj, event):
@@ -1677,10 +1579,7 @@ class AccountManager(QMainWindow):
         
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
-                for acc in self.accounts:
-                    line = f"{acc['email']}|{acc['password']}"
-                    if acc.get("token"):
-                        line += f"|{acc['token']}"
+                for line in self.account_service.export_lines():
                     f.write(line + "\n")
             
             self.log(f"Đã export {len(self.accounts)} tài khoản")
@@ -1752,7 +1651,7 @@ class AccountManager(QMainWindow):
         )
         
         if reply == QMessageBox.Yes:
-            del self.accounts[row]
+            self.account_service.delete_rows([row])
             self.update_table()
             self.save_data()
             self.log(f"Đã xóa: {email}")
