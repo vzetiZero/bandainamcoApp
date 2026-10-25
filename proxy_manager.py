@@ -68,6 +68,9 @@ BLOCK_COOLDOWN = 1800
 
 # UI nối hàm nhận log vào đây (worker thread đẩy message, UI tự đổ ra QTextEdit).
 _event_sink = None
+# Nhãn tài khoản của thread đang chạy (email) để mỗi dòng log request biết thuộc
+# tài khoản nào khi nhiều luồng chạy song song.
+_event_context = threading.local()
 
 
 def set_event_sink(sink):
@@ -76,10 +79,18 @@ def set_event_sink(sink):
     _event_sink = sink
 
 
+def set_event_context(label):
+    """Gắn nhãn tài khoản cho log của thread hiện tại; truyền "" để bỏ nhãn."""
+    _event_context.label = label or ""
+
+
 def _emit_event(message):
     sink = _event_sink
     if sink is None:
         return
+    label = getattr(_event_context, "label", "")
+    if label:
+        message = "[%s] %s" % (label, message)
     try:
         sink(message)
     except Exception:  # Log lỗi không được làm hỏng request

@@ -18,7 +18,7 @@ from app.infrastructure.bandai_profile import (
     REQUEST_TIMEOUT, HandoffResult, complete_parks2_handoff, fetch_member_profile,
 )
 from app.infrastructure.web import apply_response_cookies, cookie_payload, request_headers
-from proxy_manager import new_session
+from proxy_manager import new_session, set_event_context
 
 
 @dataclass
@@ -69,12 +69,16 @@ class BandaiAuthClient:
         nghỉ nên lần chạy lại nhận session với proxy khác; cookie cũng được làm mới.
         """
         last_error = ""
-        for _ in range(IP_LOCKOUT_ATTEMPTS):
-            try:
-                return self._login_once(email, password, on_progress)
-            except IPLockoutError as exc:
-                last_error = str(exc)
-        return None, last_error
+        set_event_context(email)
+        try:
+            for _ in range(IP_LOCKOUT_ATTEMPTS):
+                try:
+                    return self._login_once(email, password, on_progress)
+                except IPLockoutError as exc:
+                    last_error = str(exc)
+            return None, last_error
+        finally:
+            set_event_context("")
 
     def _login_once(self, email: str, password: str,
                     on_progress: Optional[Callable[[int], None]] = None):
@@ -135,12 +139,16 @@ class BandaiAuthClient:
                      on_progress: Optional[Callable[[int], None]] = None) -> LoginOutcome:
         """Đăng nhập rồi nối tiếp sang Parks2 và đọc hồ sơ thành viên."""
         last_error = ""
-        for _ in range(IP_LOCKOUT_ATTEMPTS):
-            try:
-                return self._authenticate_once(email, password, on_progress)
-            except IPLockoutError as exc:
-                last_error = str(exc)
-        return LoginOutcome(success=False, reason=last_error)
+        set_event_context(email)
+        try:
+            for _ in range(IP_LOCKOUT_ATTEMPTS):
+                try:
+                    return self._authenticate_once(email, password, on_progress)
+                except IPLockoutError as exc:
+                    last_error = str(exc)
+            return LoginOutcome(success=False, reason=last_error)
+        finally:
+            set_event_context("")
 
     def _authenticate_once(self, email: str, password: str,
                            on_progress: Optional[Callable[[int], None]] = None) -> LoginOutcome:
