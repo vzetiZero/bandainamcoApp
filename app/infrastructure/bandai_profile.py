@@ -1,20 +1,23 @@
 """Đọc hồ sơ thành viên Parks2 bằng requests thuần - không Selenium, không Playwright."""
 import re
+from dataclasses import dataclass
 from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, urlparse
 
 import requests
 
-from app.config import API_URL, CLIENT_ID, REDIRECT_URI
-from app.infrastructure.http_cookies import apply_response_cookies, cookie_payload
+from app.config import API_URL, CLIENT_ID, PARKS2_DOMAIN, PARKS2_HOST, REDIRECT_URI
+from app.infrastructure.web import apply_response_cookies, cookie_payload
+
+REQUEST_TIMEOUT = 30
 
 
-def fetch_edit_profile(session, headers):
+def fetch_edit_profile(session, headers, timeout=REQUEST_TIMEOUT):
     """Read profile fields from the member edit page using the authenticated session."""
-    url = "https://parks2.bandainamco-am.co.jp/member_regist.html?request=edit"
+    url = f"{PARKS2_HOST}/member_regist.html?request=edit"
     try:
-        response = session.get(url, headers=headers, timeout=30)
+        response = session.get(url, headers=headers, timeout=timeout)
     except requests.RequestException:
         return {}
     if response.status_code != 200:
@@ -126,15 +129,15 @@ def parse_member_mypage_html(html):
     return profile
 
 
-def fetch_member_profile(session, headers):
+def fetch_member_profile(session, headers, timeout=REQUEST_TIMEOUT):
     """Fetch and parse the authenticated member page, then fill missing fields from edit form."""
-    url = "https://parks2.bandainamco-am.co.jp/member_mypage.html"
+    url = f"{PARKS2_HOST}/member_mypage.html"
     profile_headers = dict(headers)
     profile_headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    profile_headers["Origin"] = "https://parks2.bandainamco-am.co.jp"
-    profile_headers["Referer"] = "https://parks2.bandainamco-am.co.jp/"
+    profile_headers["Origin"] = PARKS2_HOST
+    profile_headers["Referer"] = PARKS2_HOST + "/"
     try:
-        response = session.get(url, headers=profile_headers, timeout=30)
+        response = session.get(url, headers=profile_headers, timeout=timeout)
     except requests.RequestException:
         return fetch_edit_profile(session, profile_headers)
     if response.status_code != 200 or "member_mypage" not in response.url:
@@ -147,47 +150,62 @@ def fetch_member_profile(session, headers):
         return profile
     return fetch_edit_profile(session, profile_headers)
 
-def inspect_login_handoff(session, headers, redirect_url, language):
+
+
+@dataclass
+class HandoffResult:
+    """Kết quả nối tiếp phiên sang Parks2 - `ok` nghĩa là đã có phiên Parks2 thật."""
+    ok: bool = False
+    gender_code: str = ""
+    status: str = ""
+
+
+def complete_parks2_handoff(session, headers, redirect_url, language, timeout=REQUEST_TIMEOUT):
     """Follow the offered 'later' button to finish the Parks2 login without creating a passkey."""
     query = parse_qs(urlparse(redirect_url or "").query)
     code = query.get("code", [""])[0]
     if not code:
-        return {}
+        return HandoffResult()
     params = {
         "client_id": query.get("client_id", [""])[0] or CLIENT_ID,
         "backto": query.get("backto", [""])[0],
         "redirect_uri": query.get("redirect_uri", [""])[0] or REDIRECT_URI,
         "customize_id": query.get("customize_id", [""])[0],
+        "code": code,
+        "language": language,
+        "cookie": cookie_payload(session),
     }
-    params.update({"code": code, "language": language, "cookie": cookie_payload(session)})
     request_headers = dict(headers)
     request_headers["X-Requested-With"] = "XMLHttpRequest"
     request_headers["Referer"] = redirect_url
     try:
-        response = session.get(f"{API_URL}v3/passkey/info", params=params, headers=request_headers, timeout=30)
+        response = session.get(f"{API_URL}v3/passkey/info", params=params,
+                               headers=request_headers, timeout=timeout)
         data = response.json()
     except (requests.RequestException, ValueError):
-        return {"profile_fetch_status": "Could not complete the Parks2 login handoff"}
+        return HandoffResult(status="Could not complete the Parks2 login handoff")
     if data.get("result") != "OK":
-        return {"profile_fetch_status": "Could not complete the Parks2 login handoff"}
+        return HandoffResult(status="Could not complete the Parks2 login handoff")
     apply_response_cookies(session, data)
-    result = {}
+
     details = data.get("data", {})
-    gadata = details.get("gadata", {}) if isinstance(details, dict) else {}
-    if gadata.get("gender") is not None:
-        result["gender_code"] = str(gadata["gender"])
-    next_url = details.get("btn", {}).get("btn-next", {}).get("url") if isinstance(details, dict) else None
+    payload = details if isinstance(details, dict) else {}
+    gadata = payload.get("gadata", {}) if isinstance(payload.get("gadata"), dict) else {}
+    gender_code = str(gadata["gender"]) if gadata.get("gender") is not None else ""
+
+    next_url = (payload.get("btn") or {}).get("btn-next", {}).get("url")
     if not next_url:
-        result["profile_fetch_status"] = "The account site did not provide a Parks2 continuation URL"
-        return result
+        return HandoffResult(gender_code=gender_code,
+                             status="The account site did not provide a Parks2 continuation URL")
     page_headers = dict(headers)
     page_headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
     page_headers["Referer"] = redirect_url
     try:
-        callback = session.get(next_url, headers=page_headers, timeout=30, allow_redirects=True)
+        callback = session.get(next_url, headers=page_headers, timeout=timeout, allow_redirects=True)
     except requests.RequestException:
-        result["profile_fetch_status"] = "Could not finish the Parks2 login callback"
-        return result
-    if callback.status_code >= 400 or "parks2.bandainamco-am.co.jp" not in urlparse(callback.url).netloc:
-        result["profile_fetch_status"] = "Could not finish the Parks2 login callback"
-    return result
+        return HandoffResult(gender_code=gender_code,
+                             status="Could not finish the Parks2 login callback")
+    if callback.status_code >= 400 or PARKS2_DOMAIN not in urlparse(callback.url).netloc:
+        return HandoffResult(gender_code=gender_code,
+                             status="Could not finish the Parks2 login callback")
+    return HandoffResult(ok=True, gender_code=gender_code)

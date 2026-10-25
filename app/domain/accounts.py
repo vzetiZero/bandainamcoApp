@@ -23,3 +23,25 @@ def parse_account_line(line):
     if token:
         account["token"] = token
     return account
+
+
+def migrate_split_passwords(accounts):
+    """
+    Tách token ra khỏi mật khẩu cho dữ liệu lưu bởi bản cũ.
+
+    Bản cũ nhập bằng `split('|', 1)` nên mật khẩu chứa luôn phần token phía sau,
+    khiến server từ chối credentials của mọi tài khoản. Sửa tại chỗ, trả về số
+    tài khoản đã đổi.
+    """
+    migrated = 0
+    for account in accounts:
+        password = account.get("password") or ""
+        if "|" not in password:
+            continue
+        head, _, tail = password.partition("|")
+        account["password"] = head
+        if tail and not account.get("token"):
+            account["token"] = tail
+        migrated += 1
+    return migrated
+

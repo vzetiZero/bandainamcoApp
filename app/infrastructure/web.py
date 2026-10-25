@@ -1,5 +1,22 @@
-"""Cầu nối giữa cookie jar của requests và trường `cookie` dạng JSON mà site yêu cầu."""
+"""Header và cookie dùng chung cho mọi request của luồng sessions (requests thuần).
+
+Site không nhận cookie qua header suồng sã: JS của nó nhét `JSON.stringify($.cookie())`
+vào trường `cookie` của mọi request, nên cookie jar và payload phải luôn khớp nhau.
+"""
 import json
+
+from app.config import ACCOUNT_ORIGIN, LOGIN_URL, USER_AGENT
+
+
+def request_headers():
+    """Header gốc của trang đăng nhập - dùng cho cả account-api lẫn parks2."""
+    return {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+        "Origin": ACCOUNT_ORIGIN,
+        "Referer": LOGIN_URL,
+    }
 
 
 def cookie_payload(session):

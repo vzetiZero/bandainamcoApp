@@ -1,47 +1,36 @@
 import sys
-import json
 import os
-import requests
 import time
-import re
-from html import unescape
-from html.parser import HTMLParser
-from urllib.parse import urlparse, parse_qs
-from datetime import datetime, timedelta
+from urllib.parse import urlparse
+from datetime import datetime
 import webbrowser
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QTextEdit, QTableWidget,
     QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox,
-    QProgressBar, QStatusBar, QMenuBar, QMenu, QToolBar,
-    QSplitter, QFrame, QComboBox, QCheckBox, QDialog,
+    QProgressBar, QStatusBar, QMenu, QToolBar,
+    QFrame, QComboBox, QCheckBox, QDialog,
     QDialogButtonBox, QFormLayout, QTabWidget, QGroupBox,
-    QScrollArea, QSizePolicy, QSpacerItem, QAbstractItemView,
-    QTableWidgetItem, QHeaderView, QMenu, QInputDialog,
-    QStyledItemDelegate, QStyleOptionViewItem, QStyle
+    QSizePolicy, QAbstractItemView,
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QPoint, QSettings, QEvent, QRectF
-from PySide6.QtGui import (QAction, QIcon, QFont, QColor, QPalette, QLinearGradient, QBrush,
-                           QPainter, QPixmap, QShortcut, QKeySequence, QPen)
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QEvent
+from PySide6.QtGui import QAction, QIcon, QFont, QColor, QPixmap, QShortcut, QKeySequence
 
 from icon_helper import load_svg_icon, AppIcons
 from proxy_manager import (
     MODE_PER_REQUEST, MODE_PER_SESSION, PROXY_FILE, TEST_TIMEOUT,
-    check_all_proxies, new_session, proxy_manager,
+    check_all_proxies, proxy_manager,
 )
 
-from app.config import (
-    API_URL, CLIENT_ID, DATA_FILE, ENV_INFO, LOGIN_URL, PROXY_FORMAT_HINT, REDIRECT_URI, USER_AGENT,
-)
+from app.config import PROXY_FORMAT_HINT
+from app.container import build_container
 from app.domain.accounts import parse_account_line
 from app.domain.campaigns import (
     CAMPAIGN_SOON_WINDOW, CAMPAIGN_STATUS_CLOSED, CAMPAIGN_STATUS_COLORS, CAMPAIGN_STATUS_NOT_STARTED,
     CAMPAIGN_STATUS_OPEN, CAMPAIGN_STATUS_UNDETERMINED,
     campaign_status, format_campaign_remaining, parse_campaign_time,
 )
-from app.domain.login_rules import describe_login_error
-from app.infrastructure.bandai_profile import fetch_member_profile, inspect_login_handoff
-from app.infrastructure.http_cookies import apply_response_cookies, cookie_payload
+from app.infrastructure.bandai_auth import BandaiAuthClient
 from app.ui.delegates import StatusDelegate
 from app.ui.table_spec import ACCOUNT_COLUMNS
 
@@ -49,105 +38,41 @@ from app.ui.table_spec import ACCOUNT_COLUMNS
 # WORKER THREAD CHO ĐĂNG NHẬP
 # ============================================================
 class LoginWorker(QThread):
-    """Thread thực hiện đăng nhập để không block UI"""
+    """Thread đăng nhập: logic nằm trong BandaiAuthClient, lớp này chỉ đổi tín hiệu."""
     result_ready = Signal(str, bool, str)  # email, success, message
     profile_ready = Signal(str, dict)
     progress = Signal(int)
 
-    def __init__(self, email, password):
+    def __init__(self, email, password, auth_client=None):
         super().__init__()
         self.email = email
         self.password = password
+        self.auth_client = auth_client or BandaiAuthClient()
         self._is_running = True
 
     def run(self):
         try:
-            self.progress.emit(10)
-            session = new_session()
-            headers = {
-                "User-Agent": USER_AGENT,
-                "Accept": "application/json, text/javascript, */*; q=0.01",
-                "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-                "Origin": "https://account.bandainamcoid.com",
-                "Referer": LOGIN_URL,
-            }
-
-            self.progress.emit(25)
-            session.get(LOGIN_URL, params={"client_id": CLIENT_ID, "redirect_uri": REDIRECT_URI},
-                        headers=headers, timeout=30)
-            language = session.cookies.get("language") or "ja"
-            # getLanguage() của site luôn tự ghi cookie language; server cần nhìn thấy nó.
-            session.cookies.set("language", language, domain=".bandainamcoid.com", path="/")
-
-            self.progress.emit(40)
-            # init cấp cookie challenge. Bỏ qua bước này thì Parks2 không trả URL nối tiếp
-            # và hồ sơ thành viên không bao giờ đọc được.
-            init_payload = self._json(session.get(
-                f"{API_URL}v3/login/init", params={
-                    "client_id": CLIENT_ID, "redirect_uri": REDIRECT_URI, "customize_id": "",
-                    "language": language, "prompt": "", "sns_not_found": "", "lockout_child": "",
-                    "cookie": cookie_payload(session), "backto": "", "response_type": "",
-                    "scope": "", "state": "", "nonce": "",
-                }, headers=headers, timeout=30))
-            apply_response_cookies(session, init_payload)
-
-            self.progress.emit(55)
-            login_payload = self._json(session.post(
-                f"{API_URL}v3/login/idpw", data={
-                    "client_id": CLIENT_ID, "redirect_uri": REDIRECT_URI, "backto": "",
-                    "customize_id": "", "login_id": self.email, "password": self.password,
-                    "env_info": ENV_INFO, "retention": 1, "language": language,
-                    "cookie": cookie_payload(session), "prompt": "",
-                }, headers=headers, timeout=30))
-            apply_response_cookies(session, login_payload)
-
-            self.progress.emit(70)
-            error_text = describe_login_error(login_payload)
-            if error_text:
-                self.result_ready.emit(self.email, False, f"Đăng nhập thất bại: {error_text}")
-                self.progress.emit(100)
-                return
-
-            redirect = login_payload.get("redirect") or login_payload.get("redirect_no-cache") or ""
-            profile = {"email": self.email, "password": self.password}
-            handoff = inspect_login_handoff(session, headers, redirect, language)
-            handoff_status = handoff.get("profile_fetch_status")
-            profile.update({key: value for key, value in handoff.items()
-                            if key != "profile_fetch_status"})
-
-            self.progress.emit(85)
-            # Handoff fail không đồng nghĩa Parks2 không dùng được: luôn thử đọc mypage.
-            member_profile = fetch_member_profile(session, headers)
-            if member_profile:
-                profile.update(member_profile)
-                profile["profile_fetch_status"] = "Profile loaded from Parks2"
-                if handoff_status:
-                    profile["parks2_handoff_status"] = handoff_status
-            else:
-                profile["profile_fetch_status"] = (
-                    handoff_status or "Parks2 login complete; no profile fields were parsed"
-                )
-            profile.setdefault("status", "Chưa kiểm tra")
-            profile.setdefault("last_check", None)
-            self.profile_ready.emit(self.email, profile)
-
-            if member_profile:
-                self.result_ready.emit(
-                    self.email, True,
-                    f"Đăng nhập thành công - đọc được {len(member_profile)} trường hồ sơ")
-            else:
-                self.result_ready.emit(
-                    self.email, True, "Đăng nhập thành công nhưng chưa đọc được hồ sơ")
-            self.progress.emit(100)
+            outcome = self.auth_client.authenticate(
+                self.email, self.password, on_progress=self.progress.emit)
         except Exception as exc:
             self.result_ready.emit(self.email, False, f"Lỗi: {exc}")
-
-    @staticmethod
-    def _json(response):
-        try:
-            return response.json()
-        except ValueError:
-            return {"result": "NG", "data": {"msg": "Phản hồi không phải JSON"}}
+            return
+        if not outcome.success:
+            self.result_ready.emit(self.email, False, f"Đăng nhập thất bại: {outcome.reason}")
+            self.progress.emit(100)
+            return
+        profile = dict(outcome.profile)
+        profile.setdefault("status", "Chưa kiểm tra")
+        profile.setdefault("last_check", None)
+        self.profile_ready.emit(self.email, profile)
+        if outcome.profile_fields:
+            self.result_ready.emit(
+                self.email, True,
+                f"Đăng nhập thành công - đọc được {outcome.profile_fields} trường hồ sơ")
+        else:
+            self.result_ready.emit(
+                self.email, True, "Đăng nhập thành công nhưng chưa đọc được hồ sơ")
+        self.progress.emit(100)
 
     def stop(self):
         self._is_running = False
@@ -163,9 +88,10 @@ class BatchCheckWorker(QThread):
     progress = Signal(int, int)  # current, total
     finished_checking = Signal()
 
-    def __init__(self, accounts):
+    def __init__(self, accounts, auth_client=None):
         super().__init__()
         self.accounts = accounts  # list of (email, password)
+        self.auth_client = auth_client or BandaiAuthClient()
         self._is_running = True
 
     def run(self):
@@ -174,7 +100,7 @@ class BatchCheckWorker(QThread):
             if not self._is_running:
                 break
             self.progress.emit(index + 1, total)
-            account_worker = LoginWorker(email, password)
+            account_worker = LoginWorker(email, password, self.auth_client)
             profiles, results = [], []
             account_worker.profile_ready.connect(
                 lambda account_email, profile: profiles.append((account_email, profile)),
@@ -523,7 +449,7 @@ class CampaignDialog(QDialog):
 
 
 class AccountManager(QMainWindow):
-    def __init__(self):
+    def __init__(self, container=None):
         super().__init__()
         self.setWindowTitle("NAMCO Account Manager")
         logo_path = os.path.join(os.path.dirname(__file__), "icons", "logo.png")
@@ -534,8 +460,12 @@ class AccountManager(QMainWindow):
         self.accounts = []  # List of dict with all account fields
         self.workers = []
         self.pending_name_changes = {}
-        self.ui_settings = QSettings("NAMCO", "AccountManager")
-        self.hidden_columns = set(json.loads(self.ui_settings.value("hidden_account_columns", "[]")))
+        # Phụ thuộc hạ tầng đi qua chai: test truyền chai giả vào là chạy được.
+        self.container = container or build_container(on_log=self.log)
+        self.ui_settings = self.container.settings
+        self.account_repository = self.container.accounts
+        self.auth_client = self.container.auth_client
+        self.hidden_columns = set(self.ui_settings.get_json("hidden_account_columns", "[]"))
         self.sort_key = None
         self.sort_asc = True
         
@@ -820,13 +750,13 @@ class AccountManager(QMainWindow):
 
     def load_proxy_settings(self):
         """Nạp cấu hình proxy đã lưu và đọc file proxy.txt."""
-        path = self.ui_settings.value("proxy_file", PROXY_FILE)
+        path = self.ui_settings.get("proxy_file", PROXY_FILE)
         if not isinstance(path, str) or not path.strip():
             path = PROXY_FILE
-        mode = self.ui_settings.value("proxy_mode", MODE_PER_REQUEST)
+        mode = self.ui_settings.get("proxy_mode", MODE_PER_REQUEST)
         if mode not in (MODE_PER_REQUEST, MODE_PER_SESSION):
             mode = MODE_PER_REQUEST
-        enabled = self.ui_settings.value("proxy_enabled", False, type=bool)
+        enabled = self.ui_settings.get_bool("proxy_enabled", False)
 
         widgets = (self.proxy_file_input, self.proxy_mode_combo, self.proxy_enabled)
         for widget in widgets:
@@ -850,10 +780,8 @@ class AccountManager(QMainWindow):
         proxy_manager.enabled = self.proxy_enabled.isChecked()
         if reload_file:
             proxy_manager.load()
-        self.ui_settings.setValue("proxy_file", path)
-        self.ui_settings.setValue("proxy_mode", proxy_manager.mode)
-        self.ui_settings.setValue("proxy_enabled", proxy_manager.enabled)
-        self.ui_settings.sync()
+        self.ui_settings.set(proxy_file=path, proxy_mode=proxy_manager.mode,
+                             proxy_enabled=proxy_manager.enabled)
         if reload_file or self.proxy_table.rowCount() != len(proxy_manager.proxies):
             self.refresh_proxy_table()
         self.update_proxy_status()
@@ -1066,8 +994,7 @@ class AccountManager(QMainWindow):
         return row
 
     def save_campaigns(self):
-        self.ui_settings.setValue("campaigns", json.dumps(self.campaigns, ensure_ascii=False))
-        self.ui_settings.sync()
+        self.ui_settings.set_json("campaigns", self.campaigns)
         self.prune_orphan_signups()
         self.refresh_campaign_table()
 
@@ -1078,9 +1005,7 @@ class AccountManager(QMainWindow):
         for key in stale:
             del self.campaign_signups[key]
         if stale:
-            self.ui_settings.setValue(
-                "campaign_signups", json.dumps(self.campaign_signups, ensure_ascii=False))
-            self.ui_settings.sync()
+            self.ui_settings.set_json("campaign_signups", self.campaign_signups)
 
     def add_campaign(self):
         dialog = CampaignDialog(parent=self)
@@ -1135,17 +1060,11 @@ class AccountManager(QMainWindow):
 
     def load_signups(self):
         """Nạp danh sách tài khoản đã đăng ký từ QSettings."""
-        stored = self.ui_settings.value("campaign_signups", "{}")
-        try:
-            data = json.loads(stored) if isinstance(stored, str) else stored
-        except (TypeError, ValueError):
-            data = {}
+        data = self.ui_settings.get_json("campaign_signups", "{}")
         self.campaign_signups = data if isinstance(data, dict) else {}
 
     def save_signups(self):
-        self.ui_settings.setValue(
-            "campaign_signups", json.dumps(self.campaign_signups, ensure_ascii=False))
-        self.ui_settings.sync()
+        self.ui_settings.set_json("campaign_signups", self.campaign_signups)
         self.refresh_campaign_table()
 
     def signups_for(self, campaign):
@@ -1590,10 +1509,10 @@ class AccountManager(QMainWindow):
         return panel
 
     def apply_styles(self):
-        theme = self.ui_settings.value("theme", "light")
-        accent = self.ui_settings.value("accent", "#d61718")
-        font_size = int(self.ui_settings.value("font_size", 9))
-        compact = self.ui_settings.value("compact", False, type=bool)
+        theme = self.ui_settings.get("theme", "light")
+        accent = self.ui_settings.get("accent", "#d61718")
+        font_size = self.ui_settings.get_int("font_size", 9)
+        compact = self.ui_settings.get_bool("compact", False)
         if theme not in ("light", "dark"):
             theme = "light"
         if accent not in ("#d61718", "#2864c5", "#168578"):
@@ -1683,22 +1602,22 @@ class AccountManager(QMainWindow):
         theme = QComboBox()
         theme.addItem("Sáng", "light")
         theme.addItem("Tối", "dark")
-        theme.setCurrentIndex(max(0, theme.findData(self.ui_settings.value("theme", "light"))))
+        theme.setCurrentIndex(max(0, theme.findData(self.ui_settings.get("theme", "light"))))
         form.addRow("Chế độ màu", theme)
         accent = QComboBox()
         for label, color in (("Đỏ NAMCO", "#d61718"), ("Xanh dương", "#2864c5"), ("Xanh ngọc", "#168578")):
             accent.addItem(label, color)
-        accent.setCurrentIndex(max(0, accent.findData(self.ui_settings.value("accent", "#d61718"))))
+        accent.setCurrentIndex(max(0, accent.findData(self.ui_settings.get("accent", "#d61718"))))
         form.addRow("Màu nhấn", accent)
         font_size = QComboBox()
         for size, label in ((8, "Nhỏ"), (9, "Tiêu chuẩn"), (10, "Lớn")):
             font_size.addItem(label, size)
-        font_size.setCurrentIndex(max(0, font_size.findData(int(self.ui_settings.value("font_size", 9)))))
+        font_size.setCurrentIndex(max(0, font_size.findData(self.ui_settings.get_int("font_size", 9))))
         form.addRow("Cỡ chữ", font_size)
         density = QComboBox()
         density.addItem("Thoáng", False)
         density.addItem("Gọn", True)
-        density.setCurrentIndex(max(0, density.findData(self.ui_settings.value("compact", False, type=bool))))
+        density.setCurrentIndex(max(0, density.findData(self.ui_settings.get_bool("compact", False))))
         form.addRow("Mật độ bảng", density)
         layout.addLayout(form)
 
@@ -1719,11 +1638,9 @@ class AccountManager(QMainWindow):
         layout.addWidget(buttons)
 
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.ui_settings.setValue("theme", theme.currentData())
-            self.ui_settings.setValue("accent", accent.currentData())
-            self.ui_settings.setValue("font_size", font_size.currentData())
-            self.ui_settings.setValue("compact", density.currentData())
-            self.ui_settings.sync()
+            self.ui_settings.set(theme=theme.currentData(), accent=accent.currentData(),
+                                 font_size=font_size.currentData(),
+                                 compact=density.currentData())
             QApplication.setFont(QFont("Segoe UI", int(font_size.currentData())))
             self.apply_styles()
             self.status_bar.showMessage("Đã áp dụng giao diện", 3000)
@@ -1733,8 +1650,7 @@ class AccountManager(QMainWindow):
     # ============================================================
     def load_data(self):
         try:
-            stored_campaigns = self.ui_settings.value("campaigns", "[]")
-            self.campaigns = json.loads(stored_campaigns) if isinstance(stored_campaigns, str) else stored_campaigns
+            self.campaigns = self.ui_settings.get_json("campaigns", "[]")
             if not isinstance(self.campaigns, list):
                 self.campaigns = []
             self.refresh_campaign_table()
@@ -1744,45 +1660,14 @@ class AccountManager(QMainWindow):
         self.load_signups()
         self.refresh_signup_accounts()
         self.refresh_campaign_table()
-        if os.path.exists(DATA_FILE):
-            try:
-                with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                    self.accounts = json.load(f)
-                migrated = self.migrate_split_passwords()
-                self.log(f"Đã tải {len(self.accounts)} tài khoản từ file")
-                if migrated:
-                    self.log(f"Đã sửa {migrated} tài khoản bị lưu mật khẩu kèm token (định dạng email|password|token)")
-                    self.save_data()
-                self.update_table()
-            except Exception as e:
-                self.log(f"Lỗi tải dữ liệu: {e}")
-
-    def migrate_split_passwords(self):
-        """
-        Tách token ra khỏi mật khẩu cho dữ liệu đã lưu trước đây.
-
-        Bản cũ nhập bằng `split('|', 1)` nên mật khẩu chứa luôn phần token phía sau,
-        khiến server từ chối credentials của mọi tài khoản.
-        """
-        migrated = 0
-        for account in self.accounts:
-            password = account.get("password") or ""
-            if "|" not in password:
-                continue
-            head, _, tail = password.partition("|")
-            account["password"] = head
-            if tail and not account.get("token"):
-                account["token"] = tail
-            migrated += 1
-        return migrated
+        # Repository tự sửa dữ liệu mật khẩu dính token và báo qua self.log.
+        if self.account_repository.exists():
+            self.accounts = self.account_repository.load()
+            self.log(f"Đã tải {len(self.accounts)} tài khoản từ file")
+            self.update_table()
 
     def save_data(self):
-        try:
-            with open(DATA_FILE, 'w', encoding='utf-8') as f:
-                json.dump(self.accounts, f, ensure_ascii=False, indent=2)
-            self.log(f"Đã lưu {len(self.accounts)} tài khoản")
-        except Exception as e:
-            self.log(f"Lỗi lưu dữ liệu: {e}")
+        self.account_repository.save(self.accounts)
 
     # ============================================================
     # ACCOUNT OPERATIONS
@@ -1919,7 +1804,7 @@ class AccountManager(QMainWindow):
         accounts_to_check = [(acc['email'], acc['password']) for acc in self.accounts]
         
         # Tạo worker
-        self.worker = BatchCheckWorker(accounts_to_check)
+        self.worker = BatchCheckWorker(accounts_to_check, self.auth_client)
         self.worker.result_ready.connect(self.on_check_result)
         self.worker.profile_ready.connect(self.on_profile_ready)
         self.worker.progress.connect(self.on_check_progress)
@@ -1945,7 +1830,7 @@ class AccountManager(QMainWindow):
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
         
-        self.worker = LoginWorker(acc['email'], acc['password'])
+        self.worker = LoginWorker(acc['email'], acc['password'], self.auth_client)
         self.worker.result_ready.connect(lambda email, success, msg: self.on_single_result(index, email, success, msg))
         self.worker.profile_ready.connect(self.on_profile_ready)
         self.worker.progress.connect(self.progress_bar.setValue)
@@ -2100,9 +1985,7 @@ class AccountManager(QMainWindow):
             if column_key == key:
                 self.table.setColumnHidden(column, hidden)
                 break
-        self.ui_settings.setValue("hidden_account_columns",
-                                  json.dumps(sorted(self.hidden_columns), ensure_ascii=False))
-        self.ui_settings.sync()
+        self.ui_settings.set_json("hidden_account_columns", sorted(self.hidden_columns))
 
     def focus_search(self):
         self.tab_widget.setCurrentWidget(self.list_tab)

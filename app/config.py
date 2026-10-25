@@ -6,6 +6,12 @@ API_URL = "https://account-api.bandainamcoid.com/"
 LOGIN_URL = "https://account.bandainamcoid.com/login.html"
 CLIENT_ID = "namcoparks_onlinestore"
 REDIRECT_URI = "https://parks2.bandainamco-am.co.jp/member_regist_new.html?backto=top"
+PARKS2_HOST = "https://parks2.bandainamco-am.co.jp"
+PARKS2_DOMAIN = "parks2.bandainamco-am.co.jp"
+ACCOUNT_ORIGIN = "https://account.bandainamcoid.com"
+# Cookie language phải đặt ở miền gốc: account-api là subdomain khác với
+# account, đặt cookie theo account sẽ không gửi tới account-api.
+ACCOUNT_COOKIE_DOMAIN = ".bandainamcoid.com"
 DATA_FILE = "accounts_data.json"
 PROXY_FORMAT_HINT = "ip:port:username:pass"
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
