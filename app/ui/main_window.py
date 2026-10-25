@@ -106,17 +106,26 @@ class AccountManager(QMainWindow):
         list_layout.setContentsMargins(12, 12, 12, 12)
         list_layout.setSpacing(12)
         list_layout.addWidget(self.create_right_panel(), 5)
-        log_panel = QFrame()
-        log_layout = QVBoxLayout(log_panel)
-        log_layout.addWidget(QLabel("Nhật ký"))
+        self.log_panel = QFrame()
+        log_layout = QVBoxLayout(self.log_panel)
+        log_header = QHBoxLayout()
+        log_header.addWidget(QLabel("Nhật ký"))
+        log_header.addStretch(1)
+        clear_log_btn = QPushButton("Xóa log")
+        clear_log_btn.setIcon(load_svg_icon(AppIcons.X, 14))
+        clear_log_btn.setToolTip("Xóa toàn bộ nội dung nhật ký")
+        clear_log_btn.clicked.connect(self.clear_log)
+        log_header.addWidget(clear_log_btn)
+        log_layout.addLayout(log_header)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setMinimumWidth(0)
         self.log_text.setObjectName("activityLog")
         self.log_text.setFont(QFont("Consolas", 8))
         log_layout.addWidget(self.log_text)
-        log_panel.setMinimumWidth(180)
-        list_layout.addWidget(log_panel, 1)
+        self.log_panel.setMinimumWidth(180)
+        self.log_panel.hide()
+        list_layout.addWidget(self.log_panel, 1)
         self.tab_widget.addTab(self.list_tab, load_svg_icon(AppIcons.FOLDER_OPEN, 16), "Danh sách tài khoản")
         # campaigns và campaign_signups thuộc CampaignService, đã load trong load_data.
         self.campaign_states = {}   # row -> trạng thái, để cảnh báo mở đăng ký đúng 1 lần
@@ -881,6 +890,12 @@ class AccountManager(QMainWindow):
         appearance_btn.clicked.connect(self.open_appearance_settings)
         self.toolbar.addWidget(appearance_btn)
 
+        self.log_btn = QPushButton("Nhật ký")
+        self.log_btn.setCheckable(True)
+        self.log_btn.setToolTip("Mở hoặc đóng bảng nhật ký")
+        self.log_btn.toggled.connect(self.set_log_panel_visible)
+        self.toolbar.addWidget(self.log_btn)
+
     def open_input_dialog(self):
         self.input_dialog.show()
         self.input_dialog.raise_()
@@ -1610,6 +1625,16 @@ class AccountManager(QMainWindow):
     def log(self, message):
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_text.append(f"[{timestamp}] {message}")
+
+    def set_log_panel_visible(self, visible):
+        """Nút trên toolbar bật/tắt bảng nhật ký; nhãn nút phản ánh thao tác kế tiếp."""
+        self.log_panel.setVisible(visible)
+        self.log_btn.setText("Ẩn nhật ký" if visible else "Nhật ký")
+        if self.log_btn.isChecked() != visible:
+            self.log_btn.setChecked(visible)
+
+    def clear_log(self):
+        self.log_text.clear()
 
     def start_worker(self, worker):
         """

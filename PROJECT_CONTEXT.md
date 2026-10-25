@@ -137,6 +137,11 @@ và đặt ở khung nhật ký bên phải bảng.
 - Phím tắt: Ctrl+N mở dialog nhập, Ctrl+I import, Ctrl+F focus ô tìm kiếm,
   Del xóa dòng chọn (context `WidgetShortcut` gắn trên bảng để không bắt phím khi gõ ô khác).
 - Toolbar: `stats_chip` rich-text "x hoạt động · y lỗi · z chưa kiểm tra" cạnh nhãn tổng số.
+- Bảng nhật ký (`self.log_panel`, QFrame bên phải bảng) **mặc định đóng** để bảng tài khoản
+  rộng tối đa; nút **Nhật ký** trên toolbar (checkable, `log_btn`) gọi
+  `set_log_panel_visible()` để mở/đóng, nhãn đổi thành "Ẩn nhật ký" khi đang mở. Log vẫn được
+  ghi vào `log_text` khi panel đóng nên mở lại là thấy đủ. Trong panel có nút **Xóa log**
+  (`clear_log()`), chỉ xóa nội dung hiển thị, không đụng dữ liệu.
 - Dialog nhập: kéo thả file `.txt` vào ô nhập (eventFilter DragEnter/Drop, chỉ nhận `.txt`),
   `update_input_preview()` đếm sẵn "Sẽ thêm / Trùng / Sai định dạng" theo `textChanged`.
 - Cột `Status` tô màu: `Hoạt động` → `#28a745`, `Không hoạt động` → `#dc3545`,
@@ -629,6 +634,7 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 | Tab Chiến dịch | `86dcac5` | CRUD thủ công |
 | Context menu theo vùng chọn + confirm khi xóa | xem log | Kiểm tra/Copy/Xóa áp dụng cho **mọi** dòng đang chọn |
 | Fill tiến trình trong ô Email + kiểm tra đa luồng | xem log | `EmailProgressDelegate` + `PROGRESS_ROLE`; `BatchCheckWorker` dùng `ThreadPoolExecutor`, số luồng cấu hình được (mặc định 5) |
+| Panel nhật ký mặc định đóng, nút mở/đóng + Xóa log | xem log | `log_btn` checkable trên toolbar, `set_log_panel_visible()`, `clear_log()` |
 | Trạng thái + lọc + cảnh báo chiến dịch | xem git log | Tính từ ngày, không nhập tay |
 | Đăng ký thủ công + ghi nhận tài khoản | xem git log | Mở link + clipboard, người dùng tự submit |
 | Proxy cho mọi request | `6ccd2d3` | + tab Cấu hình, kiểm tra proxy |
