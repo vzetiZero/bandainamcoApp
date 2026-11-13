@@ -9,15 +9,21 @@ from PySide6.QtWidgets import (
     QTabWidget, QGroupBox, QSizePolicy, QAbstractItemView, QMainWindow, QStatusBar,
     QToolBar, QApplication, QSpinBox,
 )
-from PySide6.QtCore import Qt, QTimer, QSize, QEvent, QByteArray
-from PySide6.QtGui import QAction, QIcon, QFont, QColor, QPixmap, QShortcut, QKeySequence
+from PySide6.QtCore import Qt, QTimer, QSize, QEvent, QByteArray, QUrl
+from PySide6.QtGui import (
+    QAction, QIcon, QFont, QColor, QPixmap, QShortcut, QKeySequence, QDesktopServices,
+)
 
 from icon_helper import load_svg_icon, AppIcons
 from proxy_manager import (
     MODE_PER_REQUEST, MODE_PER_SESSION, PROXY_FILE, proxy_manager, set_event_sink,
 )
 
-from app.config import DEFAULT_CONCURRENCY, ICONS_DIR, MAX_CONCURRENCY, PROXY_FORMAT_HINT
+from app.config import (
+    BROWSER_ARTIFACTS_DIR, BROWSER_RECIPE_FILE, DEFAULT_BROWSER_PARALLEL,
+    DEFAULT_CONCURRENCY, ICONS_DIR, MAX_BROWSER_PARALLEL, MAX_CONCURRENCY,
+    PROXY_FORMAT_HINT,
+)
 from app.container import build_container
 from app.services.campaign_service import CampaignService
 from app.domain.campaigns import (
@@ -29,7 +35,10 @@ from app.ui.delegates import EmailProgressDelegate, StatusDelegate
 from app.ui.dialogs import AccountDetailsDialog, AddAccountDialog, CampaignDialog, ChangeNameDialog
 from app.ui.styles import build_stylesheet, read_appearance
 from app.ui.table_spec import ACCOUNT_COLUMNS, EMAIL_COLUMN, PROGRESS_ROLE
-from app.ui.workers import BatchCheckWorker, ChangeNameWorker, LoginWorker, ProxyCheckWorker
+from app.ui.workers import (
+    BatchCheckWorker, BrowserCampaignWorker, ChangeNameWorker, DiscoveryWorker,
+    LoginWorker, ProxyCheckWorker,
+)
 
 
 class AccountManager(QMainWindow):
@@ -146,8 +155,14 @@ class AccountManager(QMainWindow):
         self.campaign_tab = self.create_campaign_tab()
         self.tab_widget.addTab(self.campaign_tab, load_svg_icon(AppIcons.CHECK, 16), "Chi\u1ebfn d\u1ecbch")
 
+        # Worker/trạng thái của phần chạy trình duyệt (widget đã dựng trong tab Chiến dịch)
+        self.browser_worker = None
+        self.discovery_worker = None
+
         self.settings_tab = self.create_settings_tab()
         self.tab_widget.addTab(self.settings_tab, load_svg_icon(AppIcons.SETTINGS, 16), "C\u1ea5u h\u00ecnh")
+        # Nạp cấu hình trình duyệt sau khi cả hai tab đã dựng xong widget.
+        self.load_browser_settings()
 
         # Ph\u00edm t\u1eaft to\u00e0n c\u1ee5c
         input_shortcut = QShortcut(QKeySequence("Ctrl+N"), self)
@@ -277,11 +292,251 @@ class AccountManager(QMainWindow):
         signup_layout.addLayout(signup_actions)
         layout.addWidget(signup_group)
 
+        layout.addWidget(self._create_browser_group())
+
         # Làm mới trạng thái định kỳ để không phải bấm tay khi tới giờ mở/đóng
         self.campaign_timer = QTimer(self)
         self.campaign_timer.timeout.connect(self.refresh_campaign_table)
         self.campaign_timer.start(60_000)
         return tab
+
+    # ============================================================
+    # CHẠY CHIẾN DỊCH BẰNG TRÌNH DUYỆT (Playwright + chrome-devtools-mcp)
+    # ============================================================
+    def _create_browser_group(self):
+        """Nhóm điều khiển chạy tự động: mỗi tài khoản một Chrome riêng, theo recipe."""
+        group = QGroupBox("Chạy tự động bằng Chrome (Playwright + DevTools MCP)")
+        group_layout = QVBoxLayout(group)
+
+        hint = QLabel(
+            "Mỗi tài khoản được mở trong một cửa sổ Chrome RIÊNG: profile riêng, proxy "
+            "riêng (theo cấu hình proxy), cổng debug riêng. App đọc recipe trong thư mục "
+            "recipes/ để biết cần bấm vào đâu; khi trang đổi layout thì bấm Soi trang để "
+            "dò lại HTML/elements/snapshot rồi sửa recipe, không phải sửa code. Ảnh chụp "
+            "và file dò được lưu trong thư mục browser_artifacts/."
+        )
+        hint.setWordWrap(True)
+        group_layout.addWidget(hint)
+
+        options = QHBoxLayout()
+        self.browser_submit_check = QCheckBox("Tự bấm gửi (submit)")
+        self.browser_submit_check.setToolTip(
+            "Bật: sau khi điền xong app tự bấm nút gửi đăng ký. Tắt: chỉ điền và dừng lại "
+            "để bạn tự bấm.")
+        self.browser_submit_check.toggled.connect(self.on_browser_settings_changed)
+        options.addWidget(self.browser_submit_check)
+
+        self.browser_skip_registered_check = QCheckBox("Bỏ qua tài khoản đã đăng ký")
+        self.browser_skip_registered_check.setChecked(True)
+        self.browser_skip_registered_check.setToolTip(
+            "Không chạy lại tài khoản đã có trong danh sách đã đăng ký của chiến dịch này")
+        options.addWidget(self.browser_skip_registered_check)
+
+        options.addWidget(QLabel("Chrome song song:"))
+        self.browser_parallel_input = QSpinBox()
+        self.browser_parallel_input.setRange(1, MAX_BROWSER_PARALLEL)
+        self.browser_parallel_input.setValue(DEFAULT_BROWSER_PARALLEL)
+        self.browser_parallel_input.setToolTip(
+            "Mỗi Chrome chiếm khoảng 300-500MB RAM. Mặc định %d để không đè máy."
+            % DEFAULT_BROWSER_PARALLEL)
+        self.browser_parallel_input.valueChanged.connect(self.on_browser_settings_changed)
+        options.addWidget(self.browser_parallel_input)
+        options.addStretch(1)
+        group_layout.addLayout(options)
+
+        actions = QHBoxLayout()
+        self.browser_run_all_button = QPushButton("Chạy tất cả tài khoản")
+        self.browser_run_all_button.setToolTip(
+            "Chạy lần lượt từng tài khoản trong danh sách cho chiến dịch đang chọn")
+        self.browser_run_all_button.clicked.connect(
+            lambda: self.start_browser_campaign(all_accounts=True))
+        actions.addWidget(self.browser_run_all_button)
+
+        self.browser_run_one_button = QPushButton("Chạy tài khoản đang chọn")
+        self.browser_run_one_button.setToolTip("Chỉ chạy tài khoản đang chọn trong ô Tài khoản")
+        self.browser_run_one_button.clicked.connect(
+            lambda: self.start_browser_campaign(all_accounts=False))
+        actions.addWidget(self.browser_run_one_button)
+
+        self.browser_stop_button = QPushButton("Dừng")
+        self.browser_stop_button.setEnabled(False)
+        self.browser_stop_button.clicked.connect(self.stop_browser_campaign)
+        actions.addWidget(self.browser_stop_button)
+
+        discover_button = QPushButton("Soi trang (MCP)")
+        discover_button.setToolTip(
+            "Mở Chrome của tài khoản đang chọn, vào link chiến dịch và lưu HTML/elements/"
+            "snapshot để viết recipe")
+        discover_button.clicked.connect(self.discover_campaign_page)
+        actions.addWidget(discover_button)
+
+        artifacts_button = QPushButton("Mở thư mục ảnh")
+        artifacts_button.setToolTip("Mở browser_artifacts/ để xem ảnh chụp và file dò trang")
+        artifacts_button.clicked.connect(self.open_browser_artifacts)
+        actions.addWidget(artifacts_button)
+        actions.addStretch(1)
+        group_layout.addLayout(actions)
+
+        self.browser_status_label = QLabel("Chưa chạy lần nào")
+        self.browser_status_label.setWordWrap(True)
+        group_layout.addWidget(self.browser_status_label)
+        return group
+
+    def load_browser_settings(self):
+        """Nạp cấu hình chạy trình duyệt đã lưu (submit/parallel/headless/recipe)."""
+        self.browser_submit_check.blockSignals(True)
+        self.browser_submit_check.setChecked(self.ui_settings.get_bool("browser_submit", True))
+        self.browser_submit_check.blockSignals(False)
+        parallel = self.ui_settings.get_int("browser_parallel", DEFAULT_BROWSER_PARALLEL)
+        self.browser_parallel_input.blockSignals(True)
+        self.browser_parallel_input.setValue(max(1, min(MAX_BROWSER_PARALLEL, parallel)))
+        self.browser_parallel_input.blockSignals(False)
+        self.browser_headless_check.blockSignals(True)
+        self.browser_headless_check.setChecked(self.ui_settings.get_bool("browser_headless", False))
+        self.browser_headless_check.blockSignals(False)
+        recipe = self.ui_settings.get("browser_recipe", "")
+        if isinstance(recipe, str) and recipe.strip():
+            self.browser_recipe_input.setText(recipe)
+
+    def on_browser_settings_changed(self, *args):
+        """Lưu ngay lựa chọn submit/số Chrome song song/headless/recipe."""
+        self.ui_settings.set(browser_submit=bool(self.browser_submit_check.isChecked()))
+        self.ui_settings.set(browser_parallel=int(self.browser_parallel_input.value()))
+        self.ui_settings.set(browser_headless=bool(self.browser_headless_check.isChecked()))
+        self.ui_settings.set(browser_recipe=self.browser_recipe_input.text().strip()
+                             or BROWSER_RECIPE_FILE)
+
+    def browser_accounts(self, all_accounts, campaign):
+        """Danh sách (email, password) cần chạy cho chiến dịch."""
+        skip_registered = self.browser_skip_registered_check.isChecked()
+        targets = []
+        for account in self.accounts:
+            email = account.get("email") or ""
+            if not email:
+                continue
+            if not all_accounts and email != self.selected_account_email():
+                continue
+            if skip_registered and self.campaign_service.is_registered(campaign, email):
+                continue
+            targets.append((email, account.get("password", "")))
+        return targets
+
+    def start_browser_campaign(self, all_accounts=True):
+        """Chạy recipe trên Chrome riêng của từng tài khoản (submit theo checkbox)."""
+        if getattr(self, "browser_worker", None) is not None:
+            QMessageBox.information(self, "Đang chạy",
+                                    "Một lượt chạy khác đang chạy. Bấm Dừng trước đã.")
+            return
+        row = self.selected_campaign_row()
+        if row is None:
+            return
+        campaign = self.campaigns[row]
+        submit = self.browser_submit_check.isChecked()
+        service = self.container.browser_service
+        service.submit = submit
+        service.headless = self.browser_headless_check.isChecked()
+        service.parallel = int(self.browser_parallel_input.value())
+        service.recipe_path = (self.browser_recipe_input.text().strip() or BROWSER_RECIPE_FILE)
+        ok, message = service.preflight()
+        if not ok:
+            QMessageBox.warning(self, "Chưa chạy được", message)
+            self.browser_status_label.setText(message.splitlines()[0])
+            return
+        targets = self.browser_accounts(all_accounts, campaign)
+        if not targets:
+            QMessageBox.information(
+                self, "Không có tài khoản",
+                "Không có tài khoản nào cần chạy (đã bỏ qua các tài khoản đã đăng ký).")
+            return
+        warn = ("\n\nApp sẽ TỰ BẤM GỬI cho từng tài khoản." if submit
+                else "\n\nChế độ chỉ điền: app dừng trước nút gửi, bạn tự bấm.")
+        confirm = QMessageBox.question(
+            self, "Chạy chiến dịch bằng trình duyệt",
+            "Chiến dịch: %s\nTài khoản: %d\nChrome song song: %d%s\n\nTiếp tục?"
+            % (campaign.get("name") or "(chưa đặt tên)", len(targets),
+               service.parallel, warn))
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        self.log("Bắt đầu chạy '%s' cho %d tài khoản (%s)"
+                 % (campaign.get("name") or "(chưa đặt tên)", len(targets),
+                    "submit" if submit else "chỉ điền"))
+        worker = BrowserCampaignWorker(service, campaign, targets, submit=submit)
+        worker.message.connect(self.log)
+        worker.account_progress.connect(self.on_browser_account_progress)
+        worker.result_ready.connect(self.on_browser_result)
+        worker.progress.connect(self.on_browser_progress)
+        worker.finished_run.connect(self.on_browser_finished)
+        self.browser_worker = worker
+        self.browser_stop_button.setEnabled(True)
+        self.browser_run_all_button.setEnabled(False)
+        self.browser_run_one_button.setEnabled(False)
+        self.browser_status_label.setText("Đang chạy %d tài khoản..." % len(targets))
+        self.start_worker(worker)
+
+    def stop_browser_campaign(self):
+        worker = getattr(self, "browser_worker", None)
+        if worker is None:
+            return
+        worker.stop()
+        self.log("Đã yêu cầu dừng lượt chạy chiến dịch (tài khoản đang chạy sẽ xong trước)")
+
+    def on_browser_account_progress(self, email, percent):
+        self.status_bar.showMessage("%s: %d%%" % (email, percent), 2000)
+
+    def on_browser_result(self, email, ok, message, screenshot):
+        """Một tài khoản xong: ghi nhật ký, cập nhật bảng chiến dịch."""
+        prefix = "OK" if ok else "LỖI"
+        line = "[%s] %s - %s" % (prefix, email, message)
+        if screenshot:
+            line += " | ảnh: %s" % screenshot
+        self.log(line)
+        self.refresh_campaign_table()
+        self.update_signup_panel()
+
+    def on_browser_progress(self, done, total):
+        self.status_bar.showMessage("Chiến dịch: %d/%d tài khoản" % (done, total), 4000)
+
+    def on_browser_finished(self):
+        self.browser_worker = None
+        self.browser_stop_button.setEnabled(False)
+        self.browser_run_all_button.setEnabled(True)
+        self.browser_run_one_button.setEnabled(True)
+        self.browser_status_label.setText("Lượt chạy đã kết thúc")
+        self.log("Lượt chạy chiến dịch đã kết thúc")
+
+    def discover_campaign_page(self):
+        """Dò trang chiến dịch của tài khoản đang chọn để viết/cập nhật recipe."""
+        row = self.selected_campaign_row()
+        if row is None:
+            return
+        email, password = self.selected_account_record()
+        if not email:
+            QMessageBox.information(self, "Soi trang",
+                                    "Chọn một tài khoản trong ô Tài khoản trước.")
+            return
+        url = self.campaigns[row].get("url", "")
+        worker = DiscoveryWorker(email, password, url)
+        worker.message.connect(self.log)
+        worker.finished_discovery.connect(self.on_discovery_finished)
+        self.discovery_worker = worker
+        self.browser_status_label.setText("Đang soi trang bằng Chrome + MCP...")
+        self.start_worker(worker)
+
+    def on_discovery_finished(self, out_dir):
+        self.discovery_worker = None
+        if not out_dir:
+            self.browser_status_label.setText("Soi trang thất bại - xem nhật ký")
+            return
+        self.browser_status_label.setText("Đã soi trang: %s" % out_dir)
+        QMessageBox.information(
+            self, "Soi trang xong",
+            "Đã lưu dữ liệu dò trang vào:\n%s\n\nSửa selector trong recipe rồi chạy lại."
+            % out_dir)
+
+    def open_browser_artifacts(self):
+        os.makedirs(BROWSER_ARTIFACTS_DIR, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(BROWSER_ARTIFACTS_DIR))
 
     # ============================================================
     # TAB CẤU HÌNH - PROXY
@@ -378,8 +633,71 @@ class AccountManager(QMainWindow):
         proxy_layout.addWidget(self.proxy_table, 1)
 
         layout.addWidget(self._create_concurrency_group())
+        layout.addWidget(self._create_browser_settings_group())
         layout.addWidget(proxy_group, 1)
         return tab
+
+    def _create_browser_settings_group(self):
+        """Nhóm cấu hình phần chạy trình duyệt: file recipe + headless."""
+        group = QGroupBox("Trình duyệt tự động")
+        form = QFormLayout(group)
+        hint = QLabel(
+            "Recipe (công thức bấm/điền) nằm trong thư mục recipes/ và là dữ liệu, không phải "
+            "code. Trang chiến dịch đổi layout thì dùng nút Soi trang ở tab Chiến dịch để lấy "
+            "HTML/elements/snapshot rồi sửa selector. Đăng nhập và kiểm tra tài khoản vẫn đi "
+            "qua requests như cũ; chỉ phần chạy chiến dịch mới mở Chrome thật."
+        )
+        hint.setWordWrap(True)
+        form.addRow(hint)
+
+        recipe_row = QHBoxLayout()
+        self.browser_recipe_input = QLineEdit(self.ui_settings.get("browser_recipe", "")
+                                              or BROWSER_RECIPE_FILE)
+        self.browser_recipe_input.setToolTip("Đường dẫn file recipe JSON của chiến dịch")
+        self.browser_recipe_input.editingFinished.connect(self.on_browser_settings_changed)
+        browse_button = QPushButton("Chọn file...")
+        browse_button.clicked.connect(self.browse_recipe_file)
+        check_button = QPushButton("Kiểm tra recipe")
+        check_button.setIcon(load_svg_icon(AppIcons.CHECK, 16))
+        check_button.setToolTip("Đọc và kiểm tra cấu trúc/placeholder của file recipe")
+        check_button.clicked.connect(self.validate_recipe_file)
+        recipe_row.addWidget(self.browser_recipe_input, 1)
+        recipe_row.addWidget(browse_button)
+        recipe_row.addWidget(check_button)
+        form.addRow("File recipe:", recipe_row)
+
+        self.browser_headless_check = QCheckBox("Chạy Chrome ẩn (headless, không thấy cửa sổ)")
+        self.browser_headless_check.setToolTip(
+            "Chỉ bật khi đã tin recipe: một số trang chặn trình duyệt headless")
+        self.browser_headless_check.toggled.connect(self.on_browser_settings_changed)
+        form.addRow(self.browser_headless_check)
+
+        self.browser_recipe_status = QLabel("")
+        self.browser_recipe_status.setWordWrap(True)
+        form.addRow(self.browser_recipe_status)
+        return group
+
+    def browse_recipe_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Chọn file recipe", os.path.dirname(BROWSER_RECIPE_FILE),
+            "JSON Files (*.json)")
+        if not file_path:
+            return
+        self.browser_recipe_input.setText(file_path)
+        self.on_browser_settings_changed()
+        self.validate_recipe_file()
+
+    def validate_recipe_file(self):
+        """Kiểm tra file recipe và báo lỗi/placeholder ngay trong tab Cấu hình."""
+        path = self.browser_recipe_input.text().strip() or BROWSER_RECIPE_FILE
+        errors = self.container.browser_service.validate_file(path)
+        if errors:
+            self.browser_recipe_status.setText("Recipe chưa dùng được:\n- "
+                                               + "\n- ".join(errors[:6]))
+            self.log("Recipe %s chưa dùng được: %s" % (path, "; ".join(errors[:3])))
+        else:
+            self.browser_recipe_status.setText("Recipe hợp lệ: %s" % path)
+            self.log("Recipe hợp lệ: %s" % path)
 
     def _create_concurrency_group(self):
         """Nhóm cấu hình số tài khoản xử lý cùng lúc khi kiểm tra hàng loạt."""

@@ -37,3 +37,32 @@ ENV_INFO = json.dumps({"mobile": False, "platform": "Windows"}, separators=(",",
 # quá nhiều vào site/proxy.
 DEFAULT_CONCURRENCY = 5
 MAX_CONCURRENCY = 10
+
+# ============================================================
+# TRÌNH DUYỆT TỰ ĐỘNG (Playwright CDP + chrome-devtools-mcp)
+# ============================================================
+# Mỗi tài khoản có một Chrome riêng: profile riêng (cookie/phiên tách biệt),
+# cổng remote-debugging riêng và proxy riêng. Nhờ cổng đó, chrome-devtools-mcp
+# gắn được vào đúng cửa sổ của đúng tài khoản để dò selector/chụp snapshot.
+BROWSER_PROFILE_DIR = os.path.join(APP_ROOT, "browser_profiles")
+BROWSER_ARTIFACTS_DIR = os.path.join(APP_ROOT, "browser_artifacts")
+BROWSER_RECIPES_DIR = os.path.join(APP_ROOT, "recipes")
+BROWSER_RECIPE_FILE = os.path.join(BROWSER_RECIPES_DIR, "parks2_campaign.json")
+# Chrome cần user-data-dir khác mặc định mới chịu mở --remote-debugging-port;
+# profile riêng của từng tài khoản đã thoả điều kiện đó.
+BROWSER_CDP_BASE_PORT = 9400
+BROWSER_NAV_TIMEOUT = 45000      # ms, chờ một lần điều hướng
+BROWSER_ACTION_TIMEOUT = 15000   # ms, chờ một phần tử/hành động
+DEFAULT_BROWSER_PARALLEL = 1
+MAX_BROWSER_PARALLEL = 3
+# Chrome thật trên máy: dùng channel "chrome" nên UA/fingerprint là của trình
+# duyệt thật, không bịa header.
+CHROME_CANDIDATES = (
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    os.path.join(os.environ.get("LOCALAPPDATA", ""), r"Google\Chrome\Application\chrome.exe"),
+)
+# Server MCP đã cài bằng `npm i -g chrome-devtools-mcp`; đặt biến môi trường
+# CHROME_DEVTOOLS_MCP_JS để trỏ tới bản khác (hoặc dùng shim npx).
+CHROME_DEVTOOLS_MCP_JS = os.environ.get("CHROME_DEVTOOLS_MCP_JS", "")
+CHROME_DEVTOOLS_MCP_NPM_PACKAGE = "chrome-devtools-mcp"

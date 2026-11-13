@@ -1,0 +1,99 @@
+{
+  "name": "parks2_campaign",
+  "_note": "BẢN NHÁP: các 'TODO' phải thay bằng selector thật dò từ trang. Chạy: python browser_campaign.py --discover --email <email> --password <pass> --url <link chiến dịch> rồi đọc browser_artifacts/discover_*/elements.json + a11y_snapshot.txt để điền vào đây.",
+  "login": {
+    "url": "https://account.bandainamcoid.com/login.html?client_id=namcoparks_onlinestore&redirect_uri=https%3A%2F%2Fparks2.bandainamco-am.co.jp%2Fmember_regist_new.html%3Fbackto%3Dtop",
+    "logged_in_selector": "TODO-selector-chi-hien-khi-da-dang-nhap",
+    "password_selector": "input[type=password]",
+    "steps": [
+      {
+        "name": "chờ form login",
+        "action": "wait_selector",
+        "selector": "TODO-#login_id-hoac-input[name=login_id]"
+      },
+      {
+        "name": "điền email",
+        "action": "fill",
+        "selector": "TODO-#login_id",
+        "value": "{email}"
+      },
+      {
+        "name": "điền mật khẩu",
+        "action": "fill",
+        "selector": "TODO-#password",
+        "value": "{password}"
+      },
+      {
+        "name": "bấm đăng nhập",
+        "action": "click",
+        "selector": "TODO-#login-button"
+      },
+      {
+        "name": "chờ qua trang chọn passkey",
+        "action": "wait_text",
+        "selector": "",
+        "value": "TODO-cau-tren-trang-sau-khi-dang-nhap",
+        "timeout": 20000,
+        "optional": true
+      },
+      {
+        "name": "bỏ qua tạo passkey (chọn để sau)",
+        "action": "click",
+        "selector": "TODO-nut-skip-btn-next",
+        "optional": true
+      }
+    ]
+  },
+  "entry": {
+    "steps": [
+      {
+        "name": "chờ trang chiến dịch",
+        "action": "wait_selector",
+        "selector": "TODO-form-hoac-nut-dang-ky"
+      },
+      {
+        "name": "đồng ý điều khoản",
+        "action": "check",
+        "selector": "TODO-#agree",
+        "optional": true
+      },
+      {
+        "name": "chọn hạng vé / số lượng",
+        "action": "select",
+        "selector": "TODO-select[name=...]",
+        "value": "TODO-value",
+        "optional": true
+      },
+      {
+        "name": "điền email liên hệ",
+        "action": "fill",
+        "selector": "TODO-input[type=email]",
+        "value": "{email}",
+        "optional": true
+      },
+      {
+        "name": "sang bước xác nhận",
+        "action": "click",
+        "selector": "TODO-nut-xac-nhan"
+      },
+      {
+        "name": "ảnh màn hình bước xác nhận",
+        "action": "screenshot",
+        "value": "confirm",
+        "optional": true
+      },
+      {
+        "name": "bấm gửi đăng ký",
+        "action": "submit",
+        "selector": "TODO-nut-gui-that",
+        "requires_submit": true
+      }
+    ]
+  },
+  "verification": {
+    "success_text": ["受付が完了", "お申し込みを受け付けました"],
+    "already_text": ["すでに応募", "既に申し込み", "重複"],
+    "closed_text": ["受付期間外", "受付を終了"],
+    "error_text": ["エラーが発生", "アクセスが集中"]
+  }
+}

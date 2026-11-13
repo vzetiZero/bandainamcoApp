@@ -465,6 +465,29 @@ class ProxyManager:
                         % self.label_of(proxies))
         return proxies
 
+    def next_proxy_entry(self):
+        """Proxy kế tiếp dạng dict đầy đủ (host/port/username/password).
+
+        Dùng cho trình duyệt: Chrome nhận `server` + `username`/`password` riêng
+        chứ không nhận URL có credential như requests. Trả None khi proxy tắt.
+        """
+        if not self.enabled:
+            return None
+        with self._lock:
+            if not self.proxies:
+                return None
+            proxy, reused_blocked = self._pick_proxy(time.monotonic())
+        if reused_blocked:
+            _emit_event("⚠ tất cả proxy đang tạm nghỉ - dùng lại %s:%s"
+                        % (proxy["host"], proxy["port"]))
+        return proxy
+
+    def mark_entry_blocked(self, proxy, seconds=BLOCK_COOLDOWN):
+        """Đánh dấu proxy (dict entry) bị chặn IP khi trình duyệt gặp lỗi chặn."""
+        if not proxy:
+            return ""
+        return self.mark_blocked(as_requests_proxies(proxy), seconds)
+
     def new_session(self):
         """Tạo session HTTP dùng proxy theo cấu hình hiện tại."""
         return ProxySession(self)

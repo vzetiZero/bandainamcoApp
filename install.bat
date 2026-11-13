@@ -44,6 +44,24 @@ if errorlevel 1 (
     exit /b 1
 )
 
+:: Playwright chi can cho phan chay chien dich bang trinh duyet.
+:: Chrome that tren may duoc dung (channel="chrome"), KHONG can tai Chromium rieng.
+echo [INFO] Dang cai dat Playwright (tuy chon, cho phan chay bang Chrome)...
+python -m pip install playwright
+if errorlevel 1 (
+    echo [CANH BAO] Khong cai duoc Playwright - phan chay bang Chrome se khong dung duoc.
+)
+
+:: chrome-devtools-mcp: dung de soi trang/ snapshot. Thieu no thi app van chay.
+echo [INFO] Dang cai chrome-devtools-mcp (can Node.js)...
+where node >nul 2>&1
+if errorlevel 1 (
+    echo [CANH BAO] Chua co Node.js - bo qua chrome-devtools-mcp.
+) else (
+    call npm.cmd i -g chrome-devtools-mcp
+)
+
+
 echo.
 echo ==========================================
 echo    [OK] CAI DAT HOAN TAT!

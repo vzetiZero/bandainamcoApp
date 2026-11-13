@@ -20,12 +20,14 @@ Project tách theo lớp; **mọi phụ thuộc đi qua `app/container.py`**, UI
 | `account_manager.py` (24 dòng) | Điểm khởi chạy | `QApplication` + `AccountManager()`. Không còn logic. |
 | `app/config.py` | Hằng số duy nhất | URL, `CLIENT_ID`, `USER_AGENT`, `ENV_INFO`, `ACCOUNT_COOKIE_DOMAIN`, `DATA_FILE`, `ICONS_DIR` |
 | `app/domain/` | **Model** — quy tắc thuần, không import PySide6/requests | `accounts.py` (dòng nhập liệu, trạng thái, lọc, đếm), `names.py` (`NameForm`, `kanji_overrides`), `campaigns.py` (trạng thái theo ngày), `login_rules.py` (`describe_login_error`), `ip_rules.py` (nhận diện lỗi chặn IP) |
-| `app/infrastructure/` | **Adapter** — chạm mạng/dĩa/QSettings | `bandai_auth.py` (login + handoff + hồ sơ), `bandai_profile.py`, `bandai_name.py` (form đổi tên), `account_repository.py` (`accounts_data.json`), `settings_store.py` (QSettings/INI), `web.py` (header + cookie) |
-| `app/services/` | **Use case** — nghiệp vụ trên model + repo | `account_service.py` (add/delete/status/profile/export), `campaign_service.py` (CRUD + đăng ký) |
+| `app/infrastructure/` | **Adapter** — chạm mạng/dĩa/QSettings | `bandai_auth.py` (login + handoff + hồ sơ), `bandai_profile.py`, `bandai_name.py` (form đổi tên), `account_repository.py` (`accounts_data.json`), `settings_store.py` (QSettings/INI), `web.py` (header + cookie), `browser/` (xem mục 3.1) |
+| `app/services/` | **Use case** — nghiệp vụ trên model + repo | `account_service.py` (add/delete/status/profile/export), `campaign_service.py` (CRUD + đăng ký), `browser_campaign_service.py` (chạy chiến dịch bằng Chrome) |
 | `app/ui/` | **View/Controller** | `main_window.py` (view + handler), `dialogs.py`, `workers.py` (`QThread`), `delegates.py` (badge), `table_spec.py` (cột), `styles.py` (QSS) |
-| `app/container.py` | **Composition root** | `build_container(...)` trả `Container(settings, auth_client, name_client, account_repository, account_service, campaign_service)` |
+| `app/container.py` | **Composition root** | `build_container(...)` trả `Container(settings, auth_client, name_client, account_repository, account_service, campaign_service, browser_service)` |
 | `proxy_manager.py` | Proxy cho mọi HTTP request | `new_session()`, đọc `proxy.txt` |
 | `change_name.py` | CLI đổi tên | chỉ tham số dòng lệnh + gọi `BandaiNameClient.change_profile()` |
+| `browser_campaign.py` | CLI chạy/dò chiến dịch bằng Chrome | `--discover`, `--check`, `--run`, `--all`; không chứa logic, chỉ tham số + in kết quả |
+| `recipes/*.json` | Recipe thao tác trình duyệt | Dữ liệu, không phải code — sửa khi site đổi layout |
 | `icon_helper.py` | Nạp SVG icon | cache theo tên icon |
 | `accounts_data.json` | Dữ liệu tài khoản + hồ sơ | **Git-ignored, chứa mật khẩu.** |
 | `proxy.txt` | Danh sách proxy | **Git-ignored, chứa user/pass.** |
@@ -174,8 +176,7 @@ lần chạy batch kế tiếp dùng đúng số luồng vừa chọn. Mặc đ�
 ## 3. Logic tab Chiến dịch
 
 **Mục đích:** lưu danh sách link chiến dịch (link đăng ký 抽選 thời gian giới hạn) để
-nhìn nhanh chiến dịch nào đang hiệu lực. Đây là **sổ tay**, app **không** tự động
-đăng ký hộ (xem mục 10.9).
+nhìn nhanh chiến dịch nào đang hiệu lực
 
 **Mô hình dữ liệu: mỗi chiến dịch là một dòng riêng.** Không cần cập nhật liên tục.
 Thêm một dòng khi có chiến dịch mới, giữ dòng cũ để tra cứu, chỉ sửa khi link hoặc ngày
@@ -316,6 +317,81 @@ QSettings key: "campaign_signups"   # chuỗi JSON
   đã bị xoá để dữ liệu không phình vô hạn.
 - `refresh_signup_accounts()` được gọi từ `update_table()` nên combo tài khoản luôn khớp
   danh sách; có so chữ ký `signup_account_emails` để không dựng lại combo vô ích.
+
+---
+
+## 3.1 Chạy chiến dịch bằng trình duyệt (Playwright CDP + chrome-devtools-mcp)
+
+Thay thế dần cách thủ công ở mục 3 khi cần: mỗi tài khoản được mở trong **một cửa sổ
+Chrome riêng** (profile riêng, proxy riêng, cổng debug riêng), app đọc **recipe JSON**
+để biết bấm/điền vào đâu, rồi tự bấm gửi nếu bật `Tự bấm gửi`.
+
+### Vì sao chia hai lớp: Playwright chạy, MCP dò
+
+| Lớp | Vai trò | Lý do |
+|---|---|---|
+| Playwright (`chromium.launch_persistent_context` + `connect` qua CDP) | chạy flow lặp lại cho từng tài khoản | selector CSS ổn định, chạy được hàng trăm tài khoản, điều khiển được proxy có user/pass |
+| `chrome-devtools-mcp` (Node, gắn qua `--browser-url`) | dò trang, snapshot a11y, ảnh, đọc console/network | tool của MCP dựa trên **uid của snapshot**, uid đổi sau mỗi lần chụp ⇒ không dùng để replay cứng, nhưng rất tốt để *tìm* selector và chẩn đoán khi trang đổi |
+
+### Thành phần
+
+| File | Trách nhiệm |
+|---|---|
+| `app/domain/browser_recipe.py` | quy tắc thuần: `load_recipe`, `validate_recipe` (bắt action sai + placeholder `TODO`), `render_value` (`{email}`/`{password}`), `classify_outcome` (success/already/closed/error) |
+| `app/infrastructure/browser/browser_session.py` | `BrowserSession`: mở Chrome thật (`channel="chrome"` hoặc `executable_path`), `--user-data-dir=browser_profiles/<email>`, `--remote-debugging-port` (cấp phát từ `BROWSER_CDP_BASE_PORT`), proxy của `ProxyManager.next_proxy_entry()`, `goto/page_text/screenshot` |
+| `app/infrastructure/browser/campaign_runner.py` | `CampaignBrowserRunner.run()`: login (nếu recipe có) → mở link chiến dịch → chạy bước `entry` → bấm gửi (chỉ khi `submit`) → phân loại + chụp ảnh; trả `BrowserRunResult` |
+| `app/infrastructure/browser/mcp_client.py` | `DevtoolsMcpClient`: JSON-RPC stdio tới `chrome-devtools-mcp` (`initialize` → `tools/call`), tool `list_pages`, `take_snapshot`, `take_screenshot`, `evaluate_script`, `list_console_messages` |
+| `app/infrastructure/browser/discovery.py` | `discover_page()`: HTML + text + ảnh + `elements.json` (selector gợi ý) + `a11y_snapshot.txt` vào `browser_artifacts/` |
+| `app/services/browser_campaign_service.py` | `preflight()` (thiếu Chrome/recipe nháp thì chặn trước khi mở Chrome), `run()` chạy `parallel` Chrome, ghi nhận qua `CampaignService.mark()` khi trang xác nhận thành công |
+| `app/ui/workers.py::BrowserCampaignWorker` | đổi callback thành signal: `message`, `account_progress`, `result_ready`, `progress`, `finished_run` |
+| `app/ui/workers.py::DiscoveryWorker` | chạy `discover_page()` ngoài UI thread |
+
+### Recipe — 5 khối, dữ liệu thuần
+
+```json
+{
+  "name": "...",
+  "login":  { "url": "...", "logged_in_selector": "#menu",
+              "steps": [ { "action": "fill", "selector": "#login_id", "value": "{email}" } ] },
+  "entry":  { "steps": [ { "action": "click", "selector": "#agree" },
+                         { "action": "submit", "selector": "#send", "requires_submit": true } ] },
+  "verification": { "success_text": [], "already_text": [], "closed_text": [], "error_text": [] }
+}
+```
+
+Action hợp lệ: `goto`, `fill`, `select`, `check`, `click`, `press`, `wait_text`,
+`wait_selector`, `sleep`, `screenshot`, `submit`. Mọi bước nhận `optional: true`
+(bỏ qua khi phần tử không có) và `requires_submit: true` (chỉ chạy khi bật submit).
+
+### Vòng đời một lượt chạy
+
+```
+UI: start_browser_campaign() → service.preflight()  (thiếu Chrome/recipe ⇒ dừng, không mở Chrome)
+   → QMessageBox xác nhận (nêu rõ sẽ tự bấm gửi)      → BrowserCampaignWorker
+Worker: service.run(campaign, [(email, password)], submit=…)
+   mỗi tài khoản: BrowserSession(profile riêng, proxy riêng, port riêng)
+                  → login (nếu recipe có và chưa đăng nhập)
+                  → goto link chiến dịch → chạy bước entry
+                  → submit (nếu bật) → classify_outcome() → screenshot
+   → CampaignService.mark(campaign, email) khi status ∈ {registered, already}
+```
+
+### Quy ước bắt buộc của phần này
+
+1. **Proxy đi qua `ProxyManager.next_proxy_entry()`**, không đọc `proxy.txt` trực tiếp;
+   gặp dấu hiệu chặn IP thì `mark_entry_blocked()` để proxy nghỉ như luồng requests.
+2. **Một tài khoản = một profile Chrome** (`browser_profiles/<slug email>`). Không dùng
+   chung profile: cookie/phiên sẽ lẫn và Chrome chỉ cho một tiến trình giữ mỗi profile.
+3. **Selector nằm trong recipe**, không hard-code trong Python. Trang đổi thì chạy
+   `--discover` rồi sửa JSON.
+4. **Mặc định không submit** (`BrowserCampaignService.submit=False` ở container); UI bật
+   theo cấu hình đã lưu và luôn hỏi xác nhận trước khi chạy.
+5. `browser_profiles/` và `browser_artifacts/` chứa cookie và dữ liệu trang thật ⇒
+   **git-ignored**, không commit.
+6. Playwright là phụ thuộc mới (`requirements.txt`) và `chrome-devtools-mcp` cài bằng
+   `npm i -g chrome-devtools-mcp`; app vẫn chạy bình thường khi thiếu MCP (chỉ mất phần
+   snapshot/dò a11y).
+
 
 ---
 
@@ -615,6 +691,10 @@ registry như trước — dùng cho test.
 | `campaign_signups` | chuỗi JSON | `"{}"` — map `"tên\|link"` → danh sách `{email, at}` |
 | `hidden_account_columns` | chuỗi JSON | `"[]"` — tập key cột đang ẩn, `set_column_hidden()` ghi |
 | `max_workers` | int | `DEFAULT_CONCURRENCY` = **5**, clamp `1..MAX_CONCURRENCY` (10) khi đọc và khi ghi |
+| `browser_submit` | bool | `True` — có tự bấm nút gửi khi chạy chiến dịch bằng Chrome hay không (UI luôn hỏi xác nhận trước khi chạy) |
+| `browser_parallel` | int | `1`, clamp `1..MAX_BROWSER_PARALLEL` (3) — số cửa sổ Chrome song song |
+| `browser_headless` | bool | `False` — chạy Chrome ẩn (chỉ bật khi đã tin recipe) |
+| `browser_recipe` | str | rỗng ⇒ dùng `BROWSER_RECIPE_FILE` (`recipes/parks2_campaign.json`) |
 | `window_geometry` | QByteArray | — `saveGeometry()`, khôi phục bằng `restoreGeometry()` |
 | `window_state` | QByteArray | — `saveState()` (vị trí toolbar/dock) |
 | `active_tab` | int | `0` — tab đang mở lúc đóng app |
@@ -641,6 +721,33 @@ UI/services không tự chạm `QSettings`; mọi reading/ghi đi qua `SettingsS
 python -m pip install -r requirements.txt
 python account_manager.py          # hoặc start.bat / install.bat
 ```
+
+Phần chạy chiến dịch bằng trình duyệt cần thêm:
+
+```powershell
+python -m pip install playwright          # có trong requirements.txt
+cmd /c "npm.cmd i -g chrome-devtools-mcp"  # PowerShell chặn npm.ps1 => gọi npm.cmd
+python browser_campaign.py --check        # kiểm tra recipe + tìm chrome.exe
+```
+
+### Kiểm thử phần trình duyệt không cần tài khoản thật
+
+Engine recipe chạy được trên trang HTML giả, nên kiểm chứng offline:
+
+```python
+# 1) Playwright mở đúng Chrome, cấp port, chụp ảnh
+from app.infrastructure.browser.browser_session import BrowserSession
+# 2) chrome-devtools-mcp gắn vào đúng cổng đó: list_pages + take_snapshot
+from app.infrastructure.browser.mcp_client import DevtoolsMcpClient
+# 3) CampaignBrowserRunner trên file:///…/campaign.html:
+#    submit=False -> STATUS_DRY_RUN, submit=True + câu "受付が完了" -> STATUS_REGISTERED
+# 4) recipe có khối login: trang login giả -> campaign.html có #menu => login OK
+```
+
+Đã dùng cách này để xác nhận: `dry_run` không bấm gửi, `submit` bấm và đọc được câu
+xác nhận, ảnh chụp được ghi ra, luồng login chạy đúng. Chạy UI offscreen
+(`QT_QPA_PLATFORM=offscreen`) với `build_container(settings=SettingsStore(path=tmp),
+recipe_path=…)` để kiểm tra widget + `preflight()` chặn recipe nháp.
 
 ### Kiểm thử thay đổi
 
@@ -716,6 +823,7 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 | Stylesheet ra khỏi view | `c08bbd9` | `app/ui/styles.py::build_stylesheet` + `read_appearance` |
 | Đổi tên chạy đủ 2 bước confirm/execute | `54369ee` | `BandaiNameClient.change_profile`; CLI cũ chỉ POST bước 1 nên không bao giờ đổi |
 | Tự đổi proxy khi IP bị chặn | xem git log | `ip_rules` + retry trong `ProxySession`; proxy bị chặn nghỉ 300s |
+| Chạy chiến dịch bằng Chrome thật (mỗi tài khoản 1 profile + 1 proxy) | xem git log | `app/infrastructure/browser/*`, `BrowserCampaignService`, `BrowserCampaignWorker`, `recipes/parks2_campaign.json` (bản nháp) |
 
 ### 9.2 Đã thử rồi bỏ
 
@@ -723,9 +831,20 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 |---|---|
 | Sửa ngày sinh | Site không hỗ trợ qua form này (commit `8b96a95`) |
 | Random `client_id` | Phá vỡ OAuth — xem mục 1 |
-| Bot tự đăng ký chiến dịch | Rủi ro cao, app giữ mô hình thủ công |
+
+> **Đã đổi quyết định:** trước đây mục này ghi "Bot tự đăng ký chiến dịch — rủi ro cao,
+> app giữ mô hình thủ công". Nay app **có** luồng tự chạy bằng Chrome (mục 3.1) theo yêu
+> cầu, nhưng vẫn giữ nguyên luồng thủ công cũ và mặc định hỏi xác nhận trước khi chạy.
+> Rủi ro còn nguyên: submit hàng loạt có thể vi phạm ToS của NAMCO Parks và bị khoá
+> tài khoản/chặn IP — người dùng tự chịu trách nhiệm khi bật `Tự bấm gửi`.
 
 ### 9.3 Chưa làm
+
+| Hạng mục | Mô tả | Mức độ ưu tiên |
+|---|---|---|
+| Recipe thật cho trang 抽選 | `recipes/parks2_campaign.json` còn `TODO`; cần chạy `browser_campaign.py --discover` với tài khoản thật rồi điền selector | **Cao** |
+| Nhận diện captcha / bot-check | Chưa có; gặp captcha thì dừng và chụp ảnh để người dùng xử lý | Cao |
+| Tuần tự hoá proxy theo cổng Chrome | Hiện mỗi lượt chạy lấy proxy mới từ `next_proxy_entry()`, chưa ghim proxy theo profile | Trung bình |
 
 | Hạng mục | Mô tả | Mức độ ưu tiên |
 |---|---|---|
@@ -753,4 +872,8 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 5. Mọi network call trên UI phải bọc trong `QThread`.
 6. Style widget tĩnh phải khai báo trong `apply_styles()` qua `objectName`.
 7. `USER_AGENT` là nguồn duy nhất cho header HTTP. `ENV_INFO` là nguồn duy nhất cho
-   trường `env_info` và phải giữ đúng dạng `{mobile, platform}` (mục 5.4).
+   trường `env_info` và phải giữ đúng dạng `{mobile, platform}` (mục 5.4). Phần trình
+   duyệt thì dùng UA thật của Chrome, **không** gửi header tự chế.
+8. Phần trình duyệt: mỗi tài khoản một profile/port riêng (mục 3.1), selector nằm trong
+   `recipes/*.json` chứ không hard-code, `browser_profiles/` + `browser_artifacts/` là
+   git-ignored, và `submit` mặc định phải đi qua xác nhận của người dùng.

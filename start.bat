@@ -35,6 +35,13 @@ if errorlevel 1 (
     pip install PySide6
 )
 
+python -c "import playwright" >nul 2>&1
+if errorlevel 1 (
+    echo [CANH BAO] Thieu Playwright - phan chay bang Chrome se khong dung duoc.
+    echo           Cai bang: python -m pip install playwright
+)
+
+
 echo [OK] Tat ca thu vien da san sang!
 echo.
 

@@ -6,7 +6,7 @@ Windows desktop app for organizing BANDAI NAMCO ID / NAMCO Parks accounts.
 
 - Add accounts manually or import `email|password|token` lines from a text file — the **Import TXT** button lives inside the account input dialog (the trailing token is kept separately and is not part of the password).
 - Track limited-time campaign windows with dates parsed for real, a derived status column, a countdown, filters, and a warning when a campaign opens within 24 hours.
-- Check account credentials against the live login flow and report the server's real reason when a login is rejected.
+
 - Show profile fields, points, and membership flags in the account table after the Parks2 login handoff completes.
 - Open the account input panel from the toolbar button **Nhập tài khoản**; the account list tab comes first and the activity log starts closed beside the account table — use the **Nhật ký** toolbar button to show or hide it, and **Xóa log** inside the panel to clear it.
 - A dashboard strip at the top of the account list tab shows total, active, inactive and unchecked account counts, refreshed together with the table.
@@ -17,17 +17,21 @@ Windows desktop app for organizing BANDAI NAMCO ID / NAMCO Parks accounts.
 - Batch checks run concurrently. The Settings tab has a **Kiểm tra đồng thời** spinner for the number of parallel threads (1–10, default **5**, remembered between runs).
 - Edit the two Kanji name fields (`last_name_kanji`, `first_name_kanji`) in the profile dialog; the rest of the profile is read-only.
 - Send every request (login, check, name change) through proxies read from `proxy.txt`, configured in the Settings tab.
+- Run campaign sign-ups in a real browser: every account gets **its own Chrome window** (own profile, own proxy, own debug port), the app replays a JSON *recipe* of clicks/fills, and it can press the final submit button itself. `chrome-devtools-mcp` is attached to the same window to dump the accessibility snapshot and page elements when a site changes.
 
 ## Setup
 
-Requires Python 3.10 or later on Windows.
+Requires Python 3.10 or later on Windows, plus Google Chrome and Node.js LTS for the browser part.
 
 ```powershell
 python -m pip install -r requirements.txt
+cmd /c "npm.cmd i -g chrome-devtools-mcp"
 python account_manager.py
 ```
 
-You can also run `install.bat` and `start.bat`.
+`npm.ps1` is blocked by the default PowerShell execution policy, so call `npm.cmd` (or run
+`Set-ExecutionPolicy -Scope Process Bypass` first). You can also run `install.bat` and
+`start.bat`.
 
 ## Project structure
 
@@ -48,11 +52,19 @@ app/infrastructure/           adapters: the only place that touches network/disk
     account_repository.py     accounts_data.json, with the legacy-password migration
     settings_store.py         QSettings wrapper
     web.py                    shared headers + cookie handling
+    browser/                  per-account Chrome + DevTools MCP
+        browser_session.py    launch Chrome (profile, debug port, proxy), goto/screenshot
+        campaign_runner.py    replay a recipe: login → campaign page → submit → classify
+        mcp_client.py         stdio JSON-RPC client for chrome-devtools-mcp
+        discovery.py          dump html/text/elements/a11y snapshot for recipe authoring
 app/services/                 use cases the view calls
     account_service.py        add/delete/status/profile/export
     campaign_service.py       campaign CRUD + registration records
+    browser_campaign_service.py  preflight + run the recipe for many accounts
 app/ui/                       view, dialogs, QThread workers, delegate, table spec, stylesheet
 app/container.py              build_container() — wires the real collaborators
+recipes/                      JSON recipes of browser steps (data, not code)
+browser_campaign.py           CLI: --discover / --check / --run / --all
 ```
 
 `AccountManager(container=...)` is how you hand the app a fake: pass a
@@ -80,9 +92,43 @@ The **Chiến dịch** tab is a manual tracker: one row per campaign, no sign-up
 - **Export danh sách** writes the table to a pipe-separated file.
 - **Đăng ký thủ công theo chiến dịch** — pick a campaign row and an account, then *Mở trang chiến dịch* opens the official link in your browser and copies the account details to the clipboard. Paste with Ctrl+V and press submit yourself. *Ghi nhận đã đăng ký* then stores which account was registered for which campaign, shown in the *Đã đăng ký* column.
 
-The app never fills or submits the sign-up form itself — that step stays manual.
+The app never fills or submits the sign-up form itself in this manual panel — that step stays manual.
 
 Dates are validated when saving, and closing must come after opening. Leave both blank if the schedule is unknown. Campaigns already stored with free-form dates keep working and simply show as Chưa rõ until edited.
+
+## Campaign automation with Chrome
+
+The **Chạy tự động bằng Chrome** group in the campaign tab drives the sign-up page with a real browser:
+
+- **One Chrome per account** — `browser_profiles/<email>` (cookies and sessions never mix), a free
+  `--remote-debugging-port`, and the proxy from `proxy.txt` handed out by the same proxy manager the
+  request flow uses. Accounts run sequentially by default; you can raise the parallel count to 3.
+- **Recipe driven** — `recipes/parks2_campaign.json` lists the steps (`goto`, `fill`, `select`,
+  `check`, `click`, `press`, `wait_text`, `wait_selector`, `sleep`, `screenshot`, `submit`) and the
+  phrases that mean *registered / already registered / closed / error*. When the site changes you edit
+  JSON, not Python.
+- **Submit gating** — every step can be marked `requires_submit`, and the final `submit` step only
+  runs when *Tự bấm gửi* is on. The run always asks for confirmation first and lists how many
+  accounts it will submit for.
+- **Evidence** — a screenshot per account plus console/a11y dumps land in `browser_artifacts/`
+  (git-ignored). Successful runs are recorded in the campaign's *Đã đăng ký* column.
+- **MCP discovery** — **Soi trang (MCP)** opens the selected account's Chrome, walks to the campaign
+  link and saves `page.html`, `text.txt`, `elements.json` (with suggested selectors) and
+  `a11y_snapshot.txt` from `chrome-devtools-mcp`, which is what you need to fill in the recipe.
+
+The shipped recipe is still a **draft**: every selector is a `TODO`, so `--check` and the preflight
+refuse to run until you replace them:
+
+```powershell
+python browser_campaign.py --discover --email you@example.com --password secret --url "<campaign link>"
+# edit recipes/parks2_campaign.json using elements.json / a11y_snapshot.txt
+python browser_campaign.py --check
+python browser_campaign.py --run --campaign "Campaign name" --email you@example.com   # fills only
+python browser_campaign.py --all --campaign "Campaign name" --submit                  # presses submit
+```
+
+Automating sign-ups for many accounts may violate NAMCO Parks' terms of service and can get accounts
+or IPs blocked. Use it at your own risk; the manual panel above still works exactly as before.
 
 ## Authentication flow
 
