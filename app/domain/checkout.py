@@ -183,6 +183,21 @@ def summary(data):
     return " | ".join(parts) if parts else "Chưa có thông tin đặt hàng/thanh toán"
 
 
+def short_summary(data, encrypted=True):
+    """Một dòng thật ngắn cho nhãn UI (chi tiết xem ở tooltip)."""
+    data = data or {}
+    if not any(data.get(name) for name in ALL_FIELDS):
+        return "Chưa nhập thông tin"
+    parts = []
+    if has_card(data):
+        parts.append(mask_card(data.get("card_number")))
+    place = " ".join(filter(None, [data.get("pref"), data.get("city")]))
+    if place:
+        parts.append(place)
+    parts.append("đã mã hoá" if encrypted else "CHƯA mã hoá")
+    return " · ".join(parts)
+
+
 def profile_vars(data):
     """Biến cho recipe. Mọi trường văn bản đều có mặt (rỗng nếu chưa nhập) để
     `when` hiểu đúng là "chưa có"; riêng nhóm thẻ chỉ xuất hiện khi có số thẻ."""

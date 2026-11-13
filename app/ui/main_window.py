@@ -189,19 +189,12 @@ class AccountManager(QMainWindow):
 
     def create_campaign_tab(self):
         tab = QWidget()
+        tab.setToolTip(
+            "Mỗi chiến dịch là một dòng. Trạng thái tự tính từ thời gian mở/đóng đăng ký;\n"
+            "để trống ngày nếu không xác định.")
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
-        heading = QLabel("Qu\u1ea3n l\u00fd chi\u1ebfn d\u1ecbch")
-        heading.setStyleSheet("font-size: 14pt; font-weight: 700;")
-        layout.addWidget(heading)
-        explanation = QLabel(
-            "Mỗi chiến dịch là một dòng riêng. Trạng thái được tính tự động từ thời gian "
-            "mở/đóng đăng ký, nên chỉ cần thêm dòng khi có chiến dịch mới và sửa khi link "
-            "hoặc ngày của chính chiến dịch đó thay đổi. Để trống ngày nếu không xác định."
-        )
-        explanation.setWordWrap(True)
-        layout.addWidget(explanation)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
 
         filter_row = QHBoxLayout()
         filter_row.addWidget(QLabel("Lọc:"))
@@ -218,19 +211,19 @@ class AccountManager(QMainWindow):
         self.campaign_search_input.setPlaceholderText("Tên hoặc link")
         self.campaign_search_input.textChanged.connect(self.apply_campaign_filter)
         filter_row.addWidget(self.campaign_search_input, 1)
+        self.campaign_summary_label = QLabel("")
+        filter_row.addWidget(self.campaign_summary_label)
         layout.addLayout(filter_row)
 
         actions = QHBoxLayout()
-        for label, handler in (("Thêm chiến dịch", self.add_campaign), ("Sửa", self.edit_campaign),
+        for label, handler in (("Thêm", self.add_campaign), ("Sửa", self.edit_campaign),
                                ("Mở trang chính thức", self.open_campaign),
                                ("Xóa", self.delete_campaign),
-                               ("Export danh sách", self.export_campaigns)):
+                               ("Export", self.export_campaigns)):
             button = QPushButton(label)
             button.clicked.connect(handler)
             actions.addWidget(button)
         actions.addStretch(1)
-        self.campaign_summary_label = QLabel("")
-        actions.addWidget(self.campaign_summary_label)
         layout.addLayout(actions)
 
         self.campaign_table = QTableWidget(0, 8)
@@ -250,15 +243,12 @@ class AccountManager(QMainWindow):
         layout.addWidget(self.campaign_table, 1)
 
         # Đăng ký thủ công: mở link + chép thông tin tài khoản, người dùng tự bấm submit
-        signup_group = QGroupBox("Đăng ký thủ công theo chiến dịch")
+        signup_group = QGroupBox("Đăng ký thủ công")
+        signup_group.setToolTip(
+            "Chọn chiến dịch + tài khoản rồi bấm Mở trang chiến dịch: app mở link và chép "
+            "thông tin vào clipboard, bạn tự dán và bấm submit.\nXong thì bấm Ghi nhận.")
         signup_layout = QVBoxLayout(signup_group)
-        hint = QLabel(
-            "Chọn một dòng chiến dịch và một tài khoản, bấm Mở trang chiến dịch để ra trình duyệt. "
-            "App chỉ chép sẵn thông tin vào clipboard — bạn tự dán và tự bấm submit. "
-            "Xong thì bấm Ghi nhận để lưu tài khoản đã đăng ký cho chiến dịch này."
-        )
-        hint.setWordWrap(True)
-        signup_layout.addWidget(hint)
+        signup_layout.setSpacing(6)
 
         signup_row = QHBoxLayout()
         signup_row.addWidget(QLabel("Chiến dịch:"))
@@ -309,18 +299,14 @@ class AccountManager(QMainWindow):
     # ============================================================
     def _create_browser_group(self):
         """Nhóm điều khiển chạy tự động: mỗi tài khoản một Chrome riêng, theo recipe."""
-        group = QGroupBox("Chạy tự động bằng Chrome (Playwright + DevTools MCP)")
+        group = QGroupBox("Chạy tự động bằng Chrome")
+        group.setToolTip(
+            "Mỗi tài khoản mở trong một cửa sổ Chrome riêng (profile, proxy, cổng debug "
+            "riêng), chạy theo recipe trong recipes/.\n"
+            "Trang đổi layout: bấm Soi trang (MCP) để dò lại rồi sửa recipe.\n"
+            "Ảnh chụp/HTML dò được lưu ở browser_artifacts/.")
         group_layout = QVBoxLayout(group)
-
-        hint = QLabel(
-            "Mỗi tài khoản được mở trong một cửa sổ Chrome RIÊNG: profile riêng, proxy "
-            "riêng (theo cấu hình proxy), cổng debug riêng. App đọc recipe trong thư mục "
-            "recipes/ để biết cần bấm vào đâu; khi trang đổi layout thì bấm Soi trang để "
-            "dò lại HTML/elements/snapshot rồi sửa recipe, không phải sửa code. Ảnh chụp "
-            "và file dò được lưu trong thư mục browser_artifacts/."
-        )
-        hint.setWordWrap(True)
-        group_layout.addWidget(hint)
+        group_layout.setSpacing(6)
 
         options = QHBoxLayout()
         self.browser_submit_check = QCheckBox("Tự bấm gửi (submit)")
@@ -349,7 +335,7 @@ class AccountManager(QMainWindow):
         group_layout.addLayout(options)
 
         actions = QHBoxLayout()
-        self.browser_run_all_button = QPushButton("Chạy tất cả tài khoản")
+        self.browser_run_all_button = QPushButton("Chạy tất cả")
         self.browser_run_all_button.setToolTip(
             "Chạy lần lượt từng tài khoản trong danh sách cho chiến dịch đang chọn")
         self.browser_run_all_button.clicked.connect(
@@ -374,7 +360,7 @@ class AccountManager(QMainWindow):
         discover_button.clicked.connect(self.discover_campaign_page)
         actions.addWidget(discover_button)
 
-        artifacts_button = QPushButton("Mở thư mục ảnh")
+        artifacts_button = QPushButton("Ảnh chụp")
         artifacts_button.setToolTip("Mở browser_artifacts/ để xem ảnh chụp và file dò trang")
         artifacts_button.clicked.connect(self.open_browser_artifacts)
         actions.addWidget(artifacts_button)
@@ -548,63 +534,54 @@ class AccountManager(QMainWindow):
     def create_settings_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
         self.proxy_check_worker = None
 
-        heading = QLabel("C\u1ea5u h\u00ecnh")
-        heading.setStyleSheet("font-size: 14pt; font-weight: 700;")
-        layout.addWidget(heading)
-
-        proxy_group = QGroupBox("Proxy cho request")
+        proxy_group = QGroupBox("Proxy")
+        proxy_group.setToolTip(
+            "File proxy.txt, mỗi dòng: ip:port:username:pass (hoặc ip:port).\n"
+            "Site báo chặn IP (UnexpectedRemoteAddress) thì app tự đổi proxy khác và cho "
+            "proxy vừa bị chặn nghỉ 30 phút (xem DS tạm nghỉ).")
         proxy_layout = QVBoxLayout(proxy_group)
+        proxy_layout.setSpacing(6)
 
-        explanation = QLabel(
-            "Mỗi request (đăng nhập, kiểm tra tài khoản, đổi tên) sẽ dùng proxy lấy từ file "
-            "proxy.txt theo định dạng ip:port:username:pass. Khi tắt proxy, request đi thẳng "
-            "như trước. Nếu site báo chặn IP (UnexpectedRemoteAddress), app tự đổi sang proxy "
-            "khác và gửi lại request; proxy bị chặn được đưa vào danh sách tạm nghỉ 30 phút "
-            "(xem bằng nút DS tạm nghỉ). Nhật ký ghi rõ từng request đi qua proxy nào."
-        )
-        explanation.setWordWrap(True)
-        proxy_layout.addWidget(explanation)
-
-        self.proxy_enabled = QCheckBox("B\u1ebft proxy cho t\u1ea5t c\u1ea3 request")
-        self.proxy_enabled.setToolTip("T\u1eaft l\u1ebfn b\u1ecdc t\u1ea5t c\u1ea3 request \u0111i qua proxy trong file")
+        top_row = QHBoxLayout()
+        self.proxy_enabled = QCheckBox("Bật proxy")
+        self.proxy_enabled.setToolTip(
+            "Tắt: request đi thẳng bằng IP máy. Bật: mọi request đi qua proxy trong file.")
         self.proxy_enabled.toggled.connect(self.on_proxy_settings_changed)
-        proxy_layout.addWidget(self.proxy_enabled)
+        top_row.addWidget(self.proxy_enabled)
+        top_row.addWidget(QLabel("Chế độ:"))
+        self.proxy_mode_combo = QComboBox()
+        self.proxy_mode_combo.addItem("Luân phiên theo request", MODE_PER_REQUEST)
+        self.proxy_mode_combo.addItem("Mỗi tài khoản 1 proxy", MODE_PER_SESSION)
+        self.proxy_mode_combo.setToolTip("Cách phân bổ proxy cho các request")
+        self.proxy_mode_combo.currentIndexChanged.connect(self.on_proxy_settings_changed)
+        top_row.addWidget(self.proxy_mode_combo, 1)
+        proxy_layout.addLayout(top_row)
 
-        form = QFormLayout()
         file_row = QHBoxLayout()
         self.proxy_file_input = QLineEdit()
         self.proxy_file_input.setPlaceholderText(PROXY_FILE)
-        self.proxy_file_input.setToolTip("\u0110\u01b0\u1eddng d\u1eabn \u0111\u1ebfn file danh s\u00e1ch proxy")
-        browse_button = QPushButton("Ch\u1ecdn file...")
+        self.proxy_file_input.setToolTip(
+            "Đường dẫn file danh sách proxy. Định dạng: %s\n"
+            "(mỗi dòng một proxy, dòng bắt đầu bằng # bị bỏ qua)" % PROXY_FORMAT_HINT)
+        browse_button = QPushButton("Chọn file...")
         browse_button.clicked.connect(self.browse_proxy_file)
-        reload_button = QPushButton("T\u1ea3i l\u1ea1i")
+        reload_button = QPushButton("Tải lại")
         reload_button.clicked.connect(self.reload_proxy_file)
+        file_row.addWidget(QLabel("File:"))
         file_row.addWidget(self.proxy_file_input, 1)
         file_row.addWidget(browse_button)
         file_row.addWidget(reload_button)
-        form.addRow("File proxy:", file_row)
-
-        format_hint = QLabel("%s  (mỗi dòng một proxy, dòng bắt đầu bằng #)" % PROXY_FORMAT_HINT)
-        format_hint.setWordWrap(True)
-        form.addRow("\u0110\u1ecbnh d\u1ea1ng:", format_hint)
-
-        self.proxy_mode_combo = QComboBox()
-        self.proxy_mode_combo.addItem("Luân phiên theo từng request", MODE_PER_REQUEST)
-        self.proxy_mode_combo.addItem("Mỗi phiên dùng 1 proxy (mỗi tài khoản 1 proxy)", MODE_PER_SESSION)
-        self.proxy_mode_combo.setToolTip("Chọn cách phân bổ proxy cho các request")
-        self.proxy_mode_combo.currentIndexChanged.connect(self.on_proxy_settings_changed)
-        form.addRow("Chế độ:", self.proxy_mode_combo)
-        proxy_layout.addLayout(form)
+        proxy_layout.addLayout(file_row)
 
         actions = QHBoxLayout()
         check_button = QPushButton("Kiểm tra proxy")
         check_button.setIcon(load_svg_icon(AppIcons.CHECK, 16))
         check_button.clicked.connect(self.check_proxies)
-        open_button = QPushButton("Mở file proxy")
+        open_button = QPushButton("Mở file")
         open_button.setIcon(load_svg_icon(AppIcons.FOLDER_OPEN, 16))
         open_button.clicked.connect(self.open_proxy_file)
         blocked_button = QPushButton("DS tạm nghỉ")
@@ -618,10 +595,9 @@ class AccountManager(QMainWindow):
         actions.addWidget(blocked_button)
         actions.addWidget(reset_button)
         actions.addStretch(1)
-        proxy_layout.addLayout(actions)
-
         self.proxy_status_label = QLabel("")
-        proxy_layout.addWidget(self.proxy_status_label)
+        actions.addWidget(self.proxy_status_label)
+        proxy_layout.addLayout(actions)
 
         self.proxy_table = QTableWidget(0, 6)
         self.proxy_table.setHorizontalHeaderLabels(["#", "Host", "Port", "Username", "Password", "Trạng thái"])
@@ -636,24 +612,19 @@ class AccountManager(QMainWindow):
             self.proxy_table.horizontalHeader().setSectionResizeMode(col, mode)
         proxy_layout.addWidget(self.proxy_table, 1)
 
-        layout.addWidget(self._create_concurrency_group())
         layout.addWidget(self._create_browser_settings_group())
         layout.addWidget(self._create_checkout_group())
         layout.addWidget(proxy_group, 1)
         return tab
 
     def _create_browser_settings_group(self):
-        """Nhóm cấu hình phần chạy trình duyệt: file recipe + headless."""
+        """Nhóm cấu hình phần chạy trình duyệt: recipe + headless + số Chrome."""
         group = QGroupBox("Trình duyệt tự động")
-        form = QFormLayout(group)
-        hint = QLabel(
-            "Recipe (công thức bấm/điền) nằm trong thư mục recipes/ và là dữ liệu, không phải "
-            "code. Trang chiến dịch đổi layout thì dùng nút Soi trang ở tab Chiến dịch để lấy "
-            "HTML/elements/snapshot rồi sửa selector. Đăng nhập và kiểm tra tài khoản vẫn đi "
-            "qua requests như cũ; chỉ phần chạy chiến dịch mới mở Chrome thật."
-        )
-        hint.setWordWrap(True)
-        form.addRow(hint)
+        group.setToolTip(
+            "Recipe là dữ liệu trong recipes/, không phải code: trang đổi thì dò lại bằng "
+            "nút Soi trang ở tab Chiến dịch rồi sửa selector.")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(6)
 
         recipe_row = QHBoxLayout()
         self.browser_recipe_input = QLineEdit(self.ui_settings.get("browser_recipe", "")
@@ -662,67 +633,80 @@ class AccountManager(QMainWindow):
         self.browser_recipe_input.editingFinished.connect(self.on_browser_settings_changed)
         browse_button = QPushButton("Chọn file...")
         browse_button.clicked.connect(self.browse_recipe_file)
-        check_button = QPushButton("Kiểm tra recipe")
+        check_button = QPushButton("Kiểm tra")
         check_button.setIcon(load_svg_icon(AppIcons.CHECK, 16))
         check_button.setToolTip("Đọc và kiểm tra cấu trúc/placeholder của file recipe")
         check_button.clicked.connect(self.validate_recipe_file)
+        recipe_row.addWidget(QLabel("Recipe:"))
         recipe_row.addWidget(self.browser_recipe_input, 1)
         recipe_row.addWidget(browse_button)
         recipe_row.addWidget(check_button)
-        form.addRow("File recipe:", recipe_row)
+        layout.addLayout(recipe_row)
 
-        self.browser_headless_check = QCheckBox("Chạy Chrome ẩn (headless, không thấy cửa sổ)")
+        option_row = QHBoxLayout()
+        self.browser_headless_check = QCheckBox("Chrome ẩn (headless)")
         self.browser_headless_check.setToolTip(
             "Chỉ bật khi đã tin recipe: một số trang chặn trình duyệt headless")
         self.browser_headless_check.toggled.connect(self.on_browser_settings_changed)
-        form.addRow(self.browser_headless_check)
+        option_row.addWidget(self.browser_headless_check)
+
+        option_row.addWidget(QLabel("Luồng kiểm tra:"))
+        self.max_workers_input = QSpinBox()
+        self.max_workers_input.setRange(1, MAX_CONCURRENCY)
+        self.max_workers_input.setValue(self.max_workers)
+        self.max_workers_input.setToolTip(
+            "Số tài khoản kiểm tra đăng nhập cùng lúc (mặc định %d, tối đa %d)"
+            % (DEFAULT_CONCURRENCY, MAX_CONCURRENCY))
+        self.max_workers_input.valueChanged.connect(self.on_concurrency_changed)
+        option_row.addWidget(self.max_workers_input)
+        option_row.addStretch(1)
 
         self.browser_recipe_status = QLabel("")
         self.browser_recipe_status.setWordWrap(True)
-        form.addRow(self.browser_recipe_status)
+        option_row.addWidget(self.browser_recipe_status)
+        layout.addLayout(option_row)
         return group
 
     def _create_checkout_group(self):
         """Nhóm hồ sơ đặt hàng/thẻ thanh toán: người dùng nhập, không hard-code."""
         group = QGroupBox("Thông tin đặt hàng & thanh toán")
+        group.setToolTip(
+            "Dùng để tự điền ご注文情報入力 (địa chỉ, điện thoại) và bước thanh toán.\n"
+            "Recipe chỉ tham chiếu biến {zip}, {pref}, {card_number}… nên sửa ở đây là đổi "
+            "cho mọi lượt chạy.\nChỉ điền vào ô đang trống để không ghi đè hồ sơ thành viên.\n"
+            "Thẻ mã hoá DPAPI (Windows) trong checkout_profile.json — git-ignored.")
         layout = QVBoxLayout(group)
-        hint = QLabel(
-            "Thông tin dùng để tự điền form ご注文情報入力 (địa chỉ, điện thoại) và bước "
-            "thanh toán bằng thẻ. Recipe chỉ tham chiếu biến {zip}, {pref}, {card_number}… "
-            "nên đổi ở đây là đổi cho mọi lượt chạy, không phải sửa code. Chỉ điền vào ô "
-            "đang trống để không ghi đè dữ liệu hồ sơ thành viên. Thẻ được mã hoá DPAPI "
-            "của Windows, lưu trong checkout_profile.json (git-ignored)."
-        )
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
+        layout.setSpacing(6)
 
-        self.checkout_status_label = QLabel("")
-        self.checkout_status_label.setWordWrap(True)
-        layout.addWidget(self.checkout_status_label)
-
-        actions = QHBoxLayout()
+        row = QHBoxLayout()
         edit_button = QPushButton("Nhập / sửa thông tin...")
         edit_button.setToolTip("Mở hộp thoại nhập địa chỉ, điện thoại và thẻ thanh toán")
         edit_button.clicked.connect(self.edit_checkout_profile)
-        clear_button = QPushButton("Xoá thông tin")
+        clear_button = QPushButton("Xoá")
         clear_button.setToolTip("Xoá hồ sơ đặt hàng/thẻ đã lưu trên máy")
         clear_button.clicked.connect(self.clear_checkout_profile)
-        actions.addWidget(edit_button)
-        actions.addWidget(clear_button)
-        actions.addStretch(1)
-        layout.addLayout(actions)
+        row.addWidget(edit_button)
+        row.addWidget(clear_button)
+        self.checkout_status_label = QLabel("")
+        row.addWidget(self.checkout_status_label)
+        row.addStretch(1)
+        layout.addLayout(row)
         self.refresh_checkout_status()
         return group
 
     def refresh_checkout_status(self):
-        """Cập nhật dòng tóm tắt: chỉ số thẻ đã che, không CVV."""
+        """Nhãn ngắn gọn; chi tiết (địa chỉ/trường thiếu) nằm ở tooltip."""
         profile = self.container.checkout_store.load()
-        state = self.container.checkout_store.status()
-        text = checkout_domain.summary(profile)
+        encrypted = self.container.checkout_store.status() != "CHƯA mã hoá"
+        short = checkout_domain.short_summary(profile, encrypted)
+        self.checkout_status_label.setText(short)
+        detail = [checkout_domain.summary(profile)]
         gaps = checkout_domain.missing_required(profile)
         if gaps:
-            text += "  (còn thiếu: %s)" % ", ".join(gaps)
-        self.checkout_status_label.setText("%s — lưu: %s" % (text, state))
+            detail.append("Còn thiếu: " + ", ".join(gaps))
+        detail.append("Lưu: " + self.container.checkout_store.status())
+        tip = "\n".join(detail)
+        self.checkout_status_label.setToolTip(tip)
 
     def edit_checkout_profile(self):
         """Mở dialog nhập hồ sơ; lưu qua CheckoutStore (mã hoá DPAPI)."""
@@ -731,11 +715,12 @@ class AccountManager(QMainWindow):
             return
         ok, message = self.container.checkout_store.save(dialog.get_data())
         if ok:
-            self.checkout_status_label.setText(message)
             self.log("Hồ sơ đặt hàng: %s" % message)
-            QMessageBox.information(self, "Đã lưu", message)
+            self.status_bar.showMessage("Đã lưu thông tin đặt hàng", 4000)
+            if "mã hoá" in message and "CHƯA" in message.upper():
+                QMessageBox.warning(self, "Chưa mã hoá được", message)
         else:
-            self.checkout_status_label.setText("Chưa lưu được: %s" % message.splitlines()[0])
+            self.status_bar.showMessage("Chưa lưu được thông tin đặt hàng", 4000)
             QMessageBox.warning(self, "Không lưu được", message)
         self.refresh_checkout_status()
 
@@ -769,32 +754,13 @@ class AccountManager(QMainWindow):
         path = self.browser_recipe_input.text().strip() or BROWSER_RECIPE_FILE
         errors = self.container.browser_service.validate_file(path)
         if errors:
-            self.browser_recipe_status.setText("Recipe chưa dùng được:\n- "
-                                               + "\n- ".join(errors[:6]))
+            self.browser_recipe_status.setText("Recipe lỗi (%d)" % len(errors))
+            self.browser_recipe_status.setToolTip("\n".join(errors[:10]))
             self.log("Recipe %s chưa dùng được: %s" % (path, "; ".join(errors[:3])))
         else:
-            self.browser_recipe_status.setText("Recipe hợp lệ: %s" % path)
+            self.browser_recipe_status.setText("Recipe OK")
+            self.browser_recipe_status.setToolTip(path)
             self.log("Recipe hợp lệ: %s" % path)
-
-    def _create_concurrency_group(self):
-        """Nhóm cấu hình số tài khoản xử lý cùng lúc khi kiểm tra hàng loạt."""
-        group = QGroupBox("Kiểm tra tài khoản")
-        form = QFormLayout(group)
-        hint = QLabel(
-            "Khi chạy nhiều tài khoản cùng lúc, mỗi tài khoản vẫn là một phiên đăng nhập "
-            "riêng (dùng proxy từ new_session()). Tăng số luồng thì nhanh hơn nhưng dồn "
-            "request vào site và proxy nhiều hơn."
-        )
-        hint.setWordWrap(True)
-        form.addRow(hint)
-
-        self.max_workers_input = QSpinBox()
-        self.max_workers_input.setRange(1, MAX_CONCURRENCY)
-        self.max_workers_input.setValue(self.max_workers)
-        self.max_workers_input.setToolTip(f"Mặc định {DEFAULT_CONCURRENCY}, tối đa {MAX_CONCURRENCY}")
-        self.max_workers_input.valueChanged.connect(self.on_concurrency_changed)
-        form.addRow("Số luồng chạy đồng thời:", self.max_workers_input)
-        return group
 
     def on_concurrency_changed(self, value):
         self.max_workers = max(1, min(MAX_CONCURRENCY, int(value)))
@@ -1373,14 +1339,9 @@ class AccountManager(QMainWindow):
         # Title
         title = QLabel("Nhập tài khoản")
         title.setStyleSheet("font-size: 16px; font-weight: bold; color: #333;")
+        title.setToolTip("Mỗi dòng: email|password (dán trực tiếp hoặc kéo thả file .txt)")
         layout.addWidget(title)
-        
-        # Format hint
-        hint = QLabel("Định dạng: email|password, mỗi dòng 1 tài khoản · dùng nút Import TXT "
-                      "hoặc kéo thả file .txt vào ô dưới")
-        hint.setStyleSheet("color: #666; font-size: 12px;")
-        layout.addWidget(hint)
-        
+
         # Text Input
         self.text_input = QTextEdit()
         self.text_input.setPlaceholderText("email1|password1\nemail2|password2\n...")
@@ -1601,12 +1562,10 @@ class AccountManager(QMainWindow):
         dialog.setWindowTitle("Tùy chỉnh giao diện")
         dialog.setMinimumWidth(440)
         layout = QVBoxLayout(dialog)
-        title = QLabel("Cá nhân hóa không gian làm việc")
-        title.setStyleSheet("font-size: 16pt; font-weight: 700;")
+        title = QLabel("Giao diện")
+        title.setStyleSheet("font-size: 14pt; font-weight: 700;")
+        title.setToolTip("Lưu trên máy này, dùng lại ở lần mở sau")
         layout.addWidget(title)
-        description = QLabel("Lưu trên máy tính này để dùng lại ở lần mở ứng dụng tiếp theo.")
-        description.setWordWrap(True)
-        layout.addWidget(description)
 
         form = QFormLayout()
         theme = QComboBox()
