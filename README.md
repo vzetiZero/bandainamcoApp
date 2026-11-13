@@ -51,6 +51,7 @@ app/infrastructure/           adapters: the only place that touches network/disk
     bandai_name.py            profile edit form (confirm + execute)
     account_repository.py     accounts_data.json, with the legacy-password migration
     settings_store.py         QSettings wrapper
+    checkout_store.py         order/payment profile, DPAPI-encrypted on disk
     web.py                    shared headers + cookie handling
     browser/                  per-account Chrome + DevTools MCP
         browser_session.py    launch Chrome (profile, debug port, proxy), goto/screenshot
@@ -133,6 +134,31 @@ python browser_campaign.py --all --campaign "<name>" --slot 159016_1121_1330_1 -
 - `--submit` only matters if the recipe uses the `submit` action instead of `pause`.
 - Logins for these accounts go through the Parks2 form, **not** BNID: the BNID page rejects
   Parks2-only accounts with 「メールアドレス…が間違っている」.
+
+## Order and payment details (entered in the UI, nothing hard-coded)
+
+**Cấu hình → Thông tin đặt hàng & thanh toán** opens a form for what the automation should
+type into ご注文情報入力 and the payment step:
+
+| Group | Fields | Recipe variables |
+|---|---|---|
+| Recipient | 姓 / 名 / セイ / メイ | `{l_name}` `{f_name}` `{l_kana}` `{f_kana}` |
+| Address | 郵便番号 / 都道府県 / 市区町村 / 丁目・番地 / ビル名 | `{zip}` `{pref}` `{city}` `{street}` `{building}` |
+| Address | 「ビル・マンション名・部屋番号なし」 checkbox | `{building_none}` |
+| Contact | 携帯電話番号 | `{tel}` |
+| Card | name on card / number / MM/YY / CVV | `{card_holder}` `{card_number}` `{card_exp}` `{card_exp_month}` `{card_exp_year}` `{card_cvv}` |
+
+- **Nothing is hard-coded**: recipes reference the variables above, so changing a value in the
+  UI changes every future run. Recipes can also drop a step with `"when": "{zip}"` and protect
+  member data with `"only_if_empty": true` (the site warns that editing ご依頼主情報 also edits
+  the member profile).
+- **Storage**: `checkout_profile.json`, git-ignored, each value encrypted with the Windows DPAPI
+  for the current user, file ACL restricted with `icacls`. If DPAPI is unavailable the store
+  still saves but flags `encrypted: false` and the UI shows “CHƯA mã hoá”.
+- **Logs never contain card data**: only `**** **** **** 1234`, brand and expiry are printed.
+- The profile is **shared by all accounts**; leave a field blank to keep whatever the member
+  profile already has on the site.
+- Card steps only run when a card is configured — the 熊本店 lottery needs none (paid in store).
 
 Automating sign-ups for many accounts may violate NAMCO Parks' terms of service and can get accounts
 or IPs blocked. Use it at your own risk; the manual panel above still works exactly as before.

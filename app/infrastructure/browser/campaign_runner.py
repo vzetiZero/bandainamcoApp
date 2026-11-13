@@ -5,6 +5,7 @@ Trách nhiệm: mở phiên, đăng nhập nếu cần, chạy các bước trê
 về Qt/UI; mọi thứ báo ra qua callback `on_log` / `on_progress`.
 """
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -12,7 +13,7 @@ from app.config import (
     BROWSER_ACTION_TIMEOUT, BROWSER_ARTIFACTS_DIR, BROWSER_PROFILE_DIR,
 )
 from app.domain.browser_recipe import (
-    RecipeNotReady, classify_outcome, phase_steps, render_value,
+    RecipeNotReady, classify_outcome, phase_steps, render_value, truthy,
 )
 from app.domain.ip_rules import is_ip_lockout
 from app.infrastructure.browser.browser_session import (
@@ -72,7 +73,7 @@ class CampaignBrowserRunner:
 
     def __init__(self, recipe, submit=False, headless=False, proxy_manager=None,
                  chrome_path=None, profile_root=BROWSER_PROFILE_DIR,
-                 on_log=None, keep_open_seconds=0, on_keep_open=None):
+                 on_log=None, keep_open_seconds=0, on_keep_open=None, card=None):
         self.recipe = recipe
         self.submit = bool(submit)
         self.headless = bool(headless)
@@ -83,6 +84,8 @@ class CampaignBrowserRunner:
         self.keep_open_seconds = max(0, int(keep_open_seconds or 0))
         # Nhận phiên đang mở khi recipe dừng ở bước `pause` (người dùng làm tiếp).
         self.on_keep_open = on_keep_open or (lambda email, session: None)
+        # Biến thẻ thanh toán ({card_number}, {card_exp}...) do UI/Cấu hình cung cấp.
+        self.card = card or {}
 
     # ---------------- API chính ----------------
     def run(self, email, password, campaign_url, on_progress=None):
@@ -246,6 +249,16 @@ class CampaignBrowserRunner:
                 return True
             label = step.get("name") or action
             result.last_step = label
+            missing = self._missing_card_tokens(step)
+            if missing:
+                raise RecipeNotReady(
+                    "Bước '%s' cần thông tin thẻ (%s) nhưng chưa cấu hình. "
+                    "Vào tab Cấu hình → nhóm 'Thông tin đặt hàng & thanh toán' để nhập."
+                    % (label, ", ".join(missing)))
+            when = step.get("when")
+            if when and not truthy(render_value(when, email, password, self.card)):
+                self.on_log("[%s] bỏ bước '%s' (chưa có %s)" % (email, label, when))
+                continue
             try:
                 self._run_step(session, step, email, password, result)
             except _PauseFlow:
@@ -280,22 +293,87 @@ class CampaignBrowserRunner:
         locator.first.click(timeout=timeout)
         return True
 
+    def _fill(self, page, selector, value, timeout):
+        """Điền cả khi ô nhập bị ẩn (Parks2 có bản mobile ẩn cùng id)."""
+        locator = page.locator(selector)
+        for index in range(locator.count()):
+            item = locator.nth(index)
+            try:
+                if item.is_visible():
+                    item.fill(value, timeout=timeout)
+                    return True
+            except Exception:  # noqa: BLE001
+                continue
+        # Mọi bản đều ẩn: đặt giá trị bằng JS và phát event như người dùng gõ.
+        locator.first.evaluate(
+            "(el, v) => { el.value = v;"
+            " el.dispatchEvent(new Event('input', {bubbles: true}));"
+            " el.dispatchEvent(new Event('change', {bubbles: true})); }", value)
+        return True
+
+    def _select(self, page, selector, value, timeout):
+        locator = page.locator(selector)
+        for index in range(locator.count()):
+            item = locator.nth(index)
+            try:
+                if item.is_visible():
+                    item.select_option(value=value, timeout=timeout)
+                    return True
+            except Exception:  # noqa: BLE001
+                continue
+        locator.first.evaluate(
+            "(el, v) => { el.value = v;"
+            " el.dispatchEvent(new Event('change', {bubbles: true})); }", value)
+        return True
+
+    def _current_value(self, page, selector):
+        """Giá trị hiện tại của ô/select ('' nếu không đọc được)."""
+        try:
+            locator = page.locator(selector)
+            if not locator.count():
+                return ""
+            return (locator.first.input_value(timeout=1500) or "").strip()
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _missing_card_tokens(self, step):
+        """Biến `{card_*}` mà recipe dùng nhưng hồ sơ thanh toán chưa có."""
+        if (self.card or {}).get("card_number"):
+            return []
+        texts = [step.get("selector") or "", step.get("value") or "",
+                 step.get("when") or ""]
+        texts.extend(step.get("selectors") or [])
+        used = set()
+        for text in texts:
+            if not isinstance(text, str):
+                continue
+            for token in re.findall(r"\{(card_[a-z_]+)\}", text):
+                used.add(token)
+        return sorted(used)
+
     def _run_step(self, session, step, email, password, result):
         page = session.page
         action = step.get("action")
         timeout = int(step.get("timeout") or BROWSER_ACTION_TIMEOUT)
-        selector = render_value(step.get("selector") or "", email, password)
-        value = render_value(step.get("value") or "", email, password)
+        context = self.card
+        selector = render_value(step.get("selector") or "", email, password, context)
+        value = render_value(step.get("value") or "", email, password, context)
 
         if action == "goto":
-            session.goto(value)
+            session.goto(render_value(value, email, password, context))
             page.wait_for_timeout(int(step.get("settle") or 500))
         elif action == "fill":
-            page.fill(selector, value, timeout=timeout)
+            if step.get("only_if_empty") and self._current_value(page, selector):
+                self.on_log("[%s] giữ nguyên %s (site đã có dữ liệu)" % (email, selector))
+                return
+            self._fill(page, selector, value, timeout)
         elif action == "select":
-            page.select_option(selector, value=value, timeout=timeout)
+            if step.get("only_if_empty") and self._current_value(page, selector):
+                self.on_log("[%s] giữ nguyên %s (đã chọn sẵn)" % (email, selector))
+                return
+            self._select(page, selector, value, timeout)
         elif action == "check":
-            page.check(selector, timeout=timeout)
+            self._tick(session, selector, email)
         elif action == "click":
             self._click(page, selector, timeout)
             page.wait_for_timeout(int(step.get("settle") or 400))

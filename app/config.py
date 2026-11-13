@@ -66,3 +66,7 @@ CHROME_CANDIDATES = (
 # CHROME_DEVTOOLS_MCP_JS để trỏ tới bản khác (hoặc dùng shim npx).
 CHROME_DEVTOOLS_MCP_JS = os.environ.get("CHROME_DEVTOOLS_MCP_JS", "")
 CHROME_DEVTOOLS_MCP_NPM_PACKAGE = "chrome-devtools-mcp"
+
+# Hồ sơ đặt hàng + thẻ thanh toán người dùng nhập trong tab Cấu hình: file riêng,
+# git-ignored, từng giá trị mã hoá bằng DPAPI của Windows (xem checkout_store.py).
+CHECKOUT_FILE = os.path.join(APP_ROOT, "checkout_profile.json")

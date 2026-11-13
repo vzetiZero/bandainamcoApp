@@ -1,9 +1,10 @@
-"""Hộp thoại nhập liệu: chỉ lo widget, không tự gọi mạng."""
+﻿"""Hộp thoại nhập liệu: chỉ lo widget, không tự gọi mạng."""
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit,
     QMessageBox, QTextEdit,
 )
 
+from app.domain import checkout as checkout_domain
 from app.domain.campaigns import parse_campaign_time
 
 # ============================================================
@@ -256,3 +257,102 @@ class CampaignDialog(QDialog):
             "closes_at": self.close_input.text().strip(),
             "notes": self.notes_input.toPlainText().strip(),
         }
+
+# ============================================================
+# DIALOG HỒ SƠ ĐẶT HÀNG + THẺ THANH TOÁN
+# ============================================================
+class CheckoutDialog(QDialog):
+    """Nhập/sửa thông tin đặt hàng và thẻ thanh toán — không hard-code trong code.
+
+    Chỉ lo widget: dữ liệu do `CheckoutStore` mã hoá và ghi xuống đĩa; dialog không
+    tự lưu, `main_window` gọi store khi người dùng bấm Lưu để còn hiện được lỗi.
+    """
+
+    def __init__(self, profile=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Thông tin đặt hàng & thanh toán")
+        self.setMinimumWidth(560)
+        profile = profile or {}
+        layout = QFormLayout(self)
+        layout.setVerticalSpacing(8)
+
+        intro = QLabel(
+            "Thông tin dùng để điền form ご注文情報入力 và bước thanh toán. Chỉ điền khi "
+            "site đang để trống (mặc định), nên dữ liệu hồ sơ thành viên không bị ghi đè. "
+            "Dữ liệu được mã hoá bằng DPAPI của Windows và lưu trong checkout_profile.json "
+            "(git-ignored)."
+        )
+        intro.setWordWrap(True)
+        layout.addRow(intro)
+
+        self.inputs = {}
+        current_group = None
+        for name, label, group in checkout_domain.FIELDS:
+            if group != current_group:
+                current_group = group
+                header = QLabel(group)
+                header.setStyleSheet("font-weight: 700; margin-top: 8px;")
+                layout.addRow(header)
+            if name == "pref":
+                field = QComboBox()
+                field.addItem("")
+                for prefecture in checkout_domain.PREFECTURES:
+                    field.addItem(prefecture)
+                field.setCurrentText(profile.get(name, "") or "")
+            else:
+                field = QLineEdit(profile.get(name, "") or "")
+                if name == "zip":
+                    field.setPlaceholderText("7 chữ số, vd 8618006")
+                    field.setMaxLength(7)
+                elif name == "tel":
+                    field.setPlaceholderText("10-11 chữ số, vd 09016737622")
+                    field.setMaxLength(11)
+            self.inputs[name] = field
+            layout.addRow(label + ":", field)
+
+        self.building_none = QCheckBox("ビル・マンション名・部屋番号なし (không có toà nhà/phòng)")
+        self.building_none.setChecked(bool(profile.get("building_none")))
+        layout.addRow("", self.building_none)
+
+        header = QLabel("Thẻ thanh toán")
+        header.setStyleSheet("font-weight: 700; margin-top: 10px;")
+        layout.addRow(header)
+        for name, label in checkout_domain.CARD_FIELDS:
+            field = QLineEdit(profile.get(name, "") or "")
+            if name == "card_number":
+                field.setPlaceholderText("Chỉ chữ số, không dấu cách")
+                field.setMaxLength(19)
+            elif name == "card_exp":
+                field.setPlaceholderText("MM/YY, vd 12/28")
+                field.setMaxLength(7)
+            elif name == "card_cvv":
+                field.setEchoMode(QLineEdit.EchoMode.Password)
+                field.setMaxLength(4)
+            self.inputs[name] = field
+            layout.addRow(label + ":", field)
+
+        hint = QLabel(
+            "Không có thẻ thì để trống — chiến dịch trả tiền tại cửa hàng không cần thẻ."
+        )
+        hint.setWordWrap(True)
+        layout.addRow(hint)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.validate_and_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def get_data(self):
+        data = {}
+        for name, field in self.inputs.items():
+            value = field.currentText() if isinstance(field, QComboBox) else field.text()
+            data[name] = value
+        data["building_none"] = self.building_none.isChecked()
+        return data
+
+    def validate_and_accept(self):
+        errors = checkout_domain.validate(checkout_domain.clean(self.get_data()))
+        if errors:
+            QMessageBox.warning(self, "Thông tin chưa hợp lệ", "\n".join(errors))
+            return
+        self.accept()

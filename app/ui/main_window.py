@@ -25,6 +25,7 @@ from app.config import (
     PROXY_FORMAT_HINT,
 )
 from app.container import build_container
+from app.domain import checkout as checkout_domain
 from app.services.campaign_service import CampaignService
 from app.domain.campaigns import (
     CAMPAIGN_SOON_WINDOW, CAMPAIGN_STATUS_CLOSED, CAMPAIGN_STATUS_COLORS,
@@ -32,7 +33,10 @@ from app.domain.campaigns import (
     campaign_status, format_campaign_remaining, parse_campaign_time,
 )
 from app.ui.delegates import EmailProgressDelegate, StatusDelegate
-from app.ui.dialogs import AccountDetailsDialog, AddAccountDialog, CampaignDialog, ChangeNameDialog
+from app.ui.dialogs import (
+    AccountDetailsDialog, AddAccountDialog, CampaignDialog, ChangeNameDialog,
+    CheckoutDialog,
+)
 from app.ui.styles import build_stylesheet, read_appearance
 from app.ui.table_spec import ACCOUNT_COLUMNS, EMAIL_COLUMN, PROGRESS_ROLE
 from app.ui.workers import (
@@ -634,6 +638,7 @@ class AccountManager(QMainWindow):
 
         layout.addWidget(self._create_concurrency_group())
         layout.addWidget(self._create_browser_settings_group())
+        layout.addWidget(self._create_checkout_group())
         layout.addWidget(proxy_group, 1)
         return tab
 
@@ -676,6 +681,78 @@ class AccountManager(QMainWindow):
         self.browser_recipe_status.setWordWrap(True)
         form.addRow(self.browser_recipe_status)
         return group
+
+    def _create_checkout_group(self):
+        """Nhóm hồ sơ đặt hàng/thẻ thanh toán: người dùng nhập, không hard-code."""
+        group = QGroupBox("Thông tin đặt hàng & thanh toán")
+        layout = QVBoxLayout(group)
+        hint = QLabel(
+            "Thông tin dùng để tự điền form ご注文情報入力 (địa chỉ, điện thoại) và bước "
+            "thanh toán bằng thẻ. Recipe chỉ tham chiếu biến {zip}, {pref}, {card_number}… "
+            "nên đổi ở đây là đổi cho mọi lượt chạy, không phải sửa code. Chỉ điền vào ô "
+            "đang trống để không ghi đè dữ liệu hồ sơ thành viên. Thẻ được mã hoá DPAPI "
+            "của Windows, lưu trong checkout_profile.json (git-ignored)."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self.checkout_status_label = QLabel("")
+        self.checkout_status_label.setWordWrap(True)
+        layout.addWidget(self.checkout_status_label)
+
+        actions = QHBoxLayout()
+        edit_button = QPushButton("Nhập / sửa thông tin...")
+        edit_button.setToolTip("Mở hộp thoại nhập địa chỉ, điện thoại và thẻ thanh toán")
+        edit_button.clicked.connect(self.edit_checkout_profile)
+        clear_button = QPushButton("Xoá thông tin")
+        clear_button.setToolTip("Xoá hồ sơ đặt hàng/thẻ đã lưu trên máy")
+        clear_button.clicked.connect(self.clear_checkout_profile)
+        actions.addWidget(edit_button)
+        actions.addWidget(clear_button)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+        self.refresh_checkout_status()
+        return group
+
+    def refresh_checkout_status(self):
+        """Cập nhật dòng tóm tắt: chỉ số thẻ đã che, không CVV."""
+        profile = self.container.checkout_store.load()
+        state = self.container.checkout_store.status()
+        text = checkout_domain.summary(profile)
+        gaps = checkout_domain.missing_required(profile)
+        if gaps:
+            text += "  (còn thiếu: %s)" % ", ".join(gaps)
+        self.checkout_status_label.setText("%s — lưu: %s" % (text, state))
+
+    def edit_checkout_profile(self):
+        """Mở dialog nhập hồ sơ; lưu qua CheckoutStore (mã hoá DPAPI)."""
+        dialog = CheckoutDialog(self.container.checkout_store.load(), self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        ok, message = self.container.checkout_store.save(dialog.get_data())
+        if ok:
+            self.checkout_status_label.setText(message)
+            self.log("Hồ sơ đặt hàng: %s" % message)
+            QMessageBox.information(self, "Đã lưu", message)
+        else:
+            self.checkout_status_label.setText("Chưa lưu được: %s" % message.splitlines()[0])
+            QMessageBox.warning(self, "Không lưu được", message)
+        self.refresh_checkout_status()
+
+    def clear_checkout_profile(self):
+        """Xoá hồ sơ đã lưu (có hỏi lại vì không khôi phục được)."""
+        if not self.container.checkout_store.load():
+            QMessageBox.information(self, "Chưa có dữ liệu",
+                                    "Chưa có hồ sơ đặt hàng/thẻ nào được lưu.")
+            return
+        confirm = QMessageBox.question(
+            self, "Xoá thông tin đặt hàng/thẻ",
+            "Xoá hồ sơ đã lưu trên máy? Thông tin thẻ sẽ không khôi phục được.")
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        self.container.checkout_store.clear()
+        self.refresh_checkout_status()
+        self.log("Đã xoá hồ sơ đặt hàng/thẻ")
 
     def browse_recipe_file(self):
         file_path, _ = QFileDialog.getOpenFileName(

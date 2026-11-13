@@ -12,11 +12,13 @@ import threading
 from app.config import (
     BROWSER_RECIPE_FILE, DEFAULT_BROWSER_PARALLEL, MAX_BROWSER_PARALLEL,
 )
+from app.domain import checkout as checkout_domain
 from app.domain.browser_recipe import RecipeNotReady, load_recipe, validate_recipe
 from app.infrastructure.browser.browser_session import find_chrome, profile_slug
 from app.infrastructure.browser.campaign_runner import (
     SUCCESS_STATUSES, BrowserRunResult, CampaignBrowserRunner,
 )
+from app.infrastructure.checkout_store import CheckoutStore
 from proxy_manager import proxy_manager as default_proxy_manager
 
 
@@ -25,7 +27,7 @@ class BrowserCampaignService:
 
     def __init__(self, campaign_service=None, recipe_path=BROWSER_RECIPE_FILE,
                  submit=True, headless=False, parallel=DEFAULT_BROWSER_PARALLEL,
-                 proxy_manager=None, chrome_path=None):
+                 proxy_manager=None, chrome_path=None, checkout_store=None):
         self.campaign_service = campaign_service
         self.recipe_path = recipe_path
         self.submit = bool(submit)
@@ -33,6 +35,8 @@ class BrowserCampaignService:
         self.parallel = max(1, min(MAX_BROWSER_PARALLEL, int(parallel or 1)))
         self.proxy_manager = proxy_manager if proxy_manager is not None else default_proxy_manager
         self.chrome_path = chrome_path or find_chrome()
+        # Hồ sơ đặt hàng/thẻ do người dùng nhập trong UI (không hard-code).
+        self.checkout_store = checkout_store or CheckoutStore()
         self._log = lambda message: None
         # Cửa sổ Chrome đang để mở cho người dùng làm tiếp (bước thanh toán).
         self.open_sessions = {}
@@ -85,6 +89,14 @@ class BrowserCampaignService:
         progress = on_progress or (lambda done, total: None)
         submit = self.submit if submit is None else bool(submit)
         recipe = recipe or self.load_recipe()   # RecipeNotReady -> worker báo lỗi
+        # Hồ sơ đặt hàng/thẻ: đọc một lần cho cả lượt chạy, chỉ log bản tóm tắt an toàn.
+        profile = self.checkout_store.load()
+        card = checkout_domain.profile_vars(profile)
+        if card:
+            log("Hồ sơ đặt hàng: %s" % checkout_domain.summary(profile))
+        gaps = checkout_domain.missing_required(profile)
+        if gaps:
+            log("Thiếu thông tin bắt buộc (sẽ để trống cho bạn điền): %s" % ", ".join(gaps))
         targets = [(email, password) for email, password in accounts
                    if (email or "").strip()]
         total = len(targets)
@@ -105,7 +117,7 @@ class BrowserCampaignService:
                 recipe=recipe, submit=submit, headless=self.headless,
                 proxy_manager=self.proxy_manager, chrome_path=self.chrome_path,
                 on_log=log, keep_open_seconds=keep_open_seconds,
-                on_keep_open=self._keep_open)
+                on_keep_open=self._keep_open, card=card)
             report = (lambda percent: on_account_progress(email, percent)
                       if on_account_progress else None)
             return runner.run(email, password, campaign.get("url", ""),

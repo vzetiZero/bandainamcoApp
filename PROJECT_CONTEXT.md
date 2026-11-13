@@ -1,4 +1,4 @@
-# NAMCO Account Manager — Tài liệu dự án cho AI Agent
+﻿# NAMCO Account Manager — Tài liệu dự án cho AI Agent
 
 Tài liệu này mô tả **logic đã có**, **trạng thái triển khai** và **kế hoạch** của dự án.
 Đọc file này trước khi sửa bất kỳ dòng code nào.
@@ -453,6 +453,61 @@ Số liệu slot của chiến dịch: `159016_1121_1100_1` = 11/21(土) 11:00, 
 
 Cửa sổ được giữ nhờ `--hold-open` (tiến trình Python phải còn sống thì Chrome mới còn);
 ảnh bằng chứng ở `browser_artifacts/<ngày>/*_paused.png`.
+
+---
+
+## 3.3 Hồ sơ đặt hàng & thanh toán — người dùng nhập trong UI
+
+Tab **Cấu hình → nhóm “Thông tin đặt hàng & thanh toán”**: người dùng nhập/sửa địa chỉ
+nhận hàng và thẻ thanh toán. **Không có giá trị nào hard-code trong code**; recipe chỉ
+tham chiếu biến, nên đổi thông tin là đổi cho mọi lượt chạy.
+
+### Trường và biến
+
+| Nhóm | Trường | Biến trong recipe |
+|---|---|---|
+| Người nhận | 姓 / 名 / セイ / メイ | `{l_name}` `{f_name}` `{l_kana}` `{f_kana}` |
+| Địa chỉ | 郵便番号 / 都道府県 / 市区町村 / 丁目・番地 / ビル名 | `{zip}` `{pref}` `{city}` `{street}` `{building}` |
+| Địa chỉ | tick 「ビル・マンション名・部屋番号なし」 | `{building_none}` = `1` / rỗng |
+| Liên hệ | 携帯電話番号 | `{tel}` |
+| Thẻ | tên in trên thẻ / số thẻ / MM/YY / CVV | `{card_holder}` `{card_number}` `{card_exp}` `{card_exp_month}` `{card_exp_year}` `{card_cvv}` |
+
+### Thành phần
+
+| File | Trách nhiệm |
+|---|---|
+| `app/domain/checkout.py` | `FIELDS`/`CARD_FIELDS`/`PREFECTURES`, `clean()`, `validate()` (Luhn, hạn dùng, 7 số bưu điện, 10–11 số ĐT, 都道府県 hợp lệ), `summary()` (chỉ in `**** **** **** 1234`, không bao giờ in CVV), `profile_vars()` |
+| `app/infrastructure/checkout_store.py` | `CheckoutStore`: đọc/ghi `checkout_profile.json`, **mỗi giá trị mã hoá DPAPI** (`CryptProtectData`), `icacls` thắt quyền, cờ `encrypted:false` khi máy không dùng được DPAPI |
+| `app/ui/dialogs.py::CheckoutDialog` | form nhập (combo 都道府県, CVV `EchoMode.Password`), chỉ validate — không tự lưu |
+| `app/ui/main_window.py` | nhóm trong tab Cấu hình: dòng tóm tắt + `Nhập/sửa thông tin...` + `Xoá thông tin` |
+| `app/container.py` | một `CheckoutStore` dùng chung: UI ghi, `BrowserCampaignService` đọc |
+
+### Cách engine dùng hồ sơ
+
+- `BrowserCampaignService.run()` đọc hồ sơ **một lần cho cả lượt chạy**, log
+  `checkout.summary()` (đã che thẻ) và cảnh báo các trường 必須 còn thiếu.
+- `CampaignBrowserRunner(card=profile_vars(...))` render `{zip}`, `{card_number}`… vào
+  selector/value của từng bước.
+- Hai thuộc tính bước giữ an toàn dữ liệu thành viên:
+  - `"when": "{zip}"` — chỉ chạy khi biến có giá trị (rỗng/0/false ⇒ bỏ bước, có log).
+  - `"only_if_empty": true` — không ghi đè ô mà site đã điền sẵn. Mặc định dùng cho
+    toàn bộ bước điền địa chỉ trong recipe, vì form ご注文情報入力 cảnh báo
+    「ご依頼主情報を変更するとマイページの会員情報も変更されます」 (sửa là đổi luôn hồ sơ
+    thành viên).
+- Bước dùng `{card_*}` mà chưa có thẻ ⇒ dừng với lỗi rõ ràng, không điền chuỗi rỗng.
+- Biến không có trong context bị render thành rỗng (không để chữ `{building}` dính vào form).
+
+### Bảo mật
+
+1. Thông tin thẻ **không** nằm trong `ui_settings.ini`; file riêng `checkout_profile.json`,
+   git-ignored, giá trị mã hoá DPAPI của tài khoản Windows đang dùng.
+2. Không ghi log giá trị thẻ/CVV: chỉ `checkout.summary()` (đã che). `_missing_card_tokens`
+   báo *tên* biến thiếu, không báo giá trị.
+3. Hồ sơ là **một bộ dùng chung cho mọi tài khoản**. Với tài khoản có địa chỉ khác, để trống
+   trường đó (recipe sẽ giữ nguyên dữ liệu site đang có) thay vì điền đè.
+4. DPAPI không khả dụng (không phải Windows) ⇒ store vẫn lưu nhưng trả cờ `encrypted:false`
+   và UI hiện “CHƯA mã hoá” để người dùng biết.
+
 
 
 
@@ -941,3 +996,4 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 8. Phần trình duyệt: mỗi tài khoản một profile/port riêng (mục 3.1), selector nằm trong
    `recipes/*.json` chứ không hard-code, `browser_profiles/` + `browser_artifacts/` là
    git-ignored, và `submit` mặc định phải đi qua xác nhận của người dùng.
+

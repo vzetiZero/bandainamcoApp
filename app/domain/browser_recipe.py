@@ -44,10 +44,13 @@ Bước (`steps`) là dict có `action`:
 | `submit` | — | điểm bấm gửi: **chỉ chạy khi bật submit** |
 
 Mọi bước có thể đặt `"optional": true` để bỏ qua khi phần tử không có (ví dụ
-hộp thoại cookie/đồng ý điều khoản chỉ xuất hiện lần đầu) và
-`"requires_submit": true` để chỉ chạy khi người dùng bật submit.
+hộp thoại cookie/đồng ý điều khoản chỉ xuất hiện lần đầu),
+`"requires_submit": true` để chỉ chạy khi người dùng bật submit,
+`"when": "{bien}"` để chỉ chạy khi biến đó có giá trị (rỗng/0/false ⇒ bỏ bước), và
+`"only_if_empty": true` cho `fill`/`select` để KHÔNG ghi đè dữ liệu site đã điền sẵn.
 """
 import json
+import re
 
 STEP_ACTIONS = (
     "goto", "fill", "select", "check", "click", "press",
@@ -72,6 +75,13 @@ REQUIRED_FIELDS = {
 # Dấu hiệu recipe còn là bản nháp: chưa dò selector thật trên trang.
 PLACEHOLDER_MARKERS = ("TODO", "<", "selector-that")
 VERIFICATION_KEYS = ("success_text", "already_text", "closed_text", "error_text")
+# Giá trị của `when` bị coi là "không bật".
+FALSE_VALUES = frozenset({"", "0", "false", "no", "off", "none", "null"})
+
+
+def truthy(text):
+    """True khi `when`/biến có nội dung thật sự bật bước."""
+    return str(text if text is not None else "").strip().lower() not in FALSE_VALUES
 
 
 class RecipeNotReady(Exception):
@@ -120,6 +130,11 @@ def _steps_errors(steps, where):
             for text in (selectors or []):
                 if isinstance(text, str) and any(mark in text for mark in PLACEHOLDER_MARKERS):
                     errors.append("%s (dismiss): '%s' còn là placeholder" % (label, text))
+        when = step.get("when")
+        if when is not None and not isinstance(when, str):
+            errors.append("%s: 'when' phải là chuỗi (vd \"{zip}\")" % label)
+        if "only_if_empty" in step and not isinstance(step.get("only_if_empty"), bool):
+            errors.append("%s: 'only_if_empty' phải là true/false" % label)
         for field in ("selector", "value"):
             text = step.get(field)
             if isinstance(text, str) and any(mark in text for mark in PLACEHOLDER_MARKERS):
@@ -159,11 +174,22 @@ def validate_recipe(recipe):
     return errors
 
 
-def render_value(template, email="", password=""):
-    """Thay {email}/{password} trong selector/value. Giữ nguyên nếu không có biến."""
+def render_value(template, email="", password="", context=None):
+    """Thay `{email}`, `{password}` và các biến trong `context` (vd `{card_number}`).
+
+    `context` là dict phẳng lấy từ `payment.card_vars()` hoặc nguồn khác; giá trị
+    thiếu thì thay bằng chuỗi rỗng để form không bị dính chữ "{...}".
+    """
     if not isinstance(template, str):
         return template
-    return template.replace("{email}", email or "").replace("{password}", password or "")
+    text = template.replace("{email}", email or "").replace("{password}", password or "")
+    for key, value in (context or {}).items():
+        token = "{%s}" % key
+        if token in text:
+            text = text.replace(token, "" if value is None else str(value))
+    # Biến không có trong context phải thành rỗng, không được để chữ "{building}"
+    # dính vào form hay làm `when` tưởng là "có giá trị".
+    return re.sub(r"\{[a-z_]+\}", "", text)
 
 
 def phase_steps(recipe, phase):

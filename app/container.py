@@ -12,6 +12,7 @@ from app.config import BROWSER_RECIPE_FILE, DATA_FILE, SETTINGS_FILE
 from app.infrastructure.account_repository import AccountRepository
 from app.infrastructure.bandai_auth import BandaiAuthClient
 from app.infrastructure.bandai_name import BandaiNameClient
+from app.infrastructure.checkout_store import CheckoutStore
 from app.infrastructure.settings_store import SettingsStore
 from app.services.account_service import AccountService
 from app.services.browser_campaign_service import BrowserCampaignService
@@ -29,6 +30,8 @@ class Container:
     campaign_service: CampaignService
     # Chạy chiến dịch bằng trình duyệt (Playwright + chrome-devtools-mcp).
     browser_service: BrowserCampaignService
+    # Hồ sơ đặt hàng/thẻ do người dùng nhập trong UI (mã hoá DPAPI).
+    checkout_store: CheckoutStore
 
 
 def build_container(data_file: str = DATA_FILE,
@@ -47,6 +50,8 @@ def build_container(data_file: str = DATA_FILE,
     auth_client = BandaiAuthClient(session_factory=factory)
     repository = AccountRepository(path=data_file, on_change=on_log)
     campaign_service = CampaignService(settings)
+    # Một store dùng chung: UI ghi, BrowserCampaignService đọc khi chạy.
+    checkout_store = CheckoutStore(on_log=on_log)
     return Container(
         settings=settings,
         auth_client=auth_client,
@@ -59,5 +64,7 @@ def build_container(data_file: str = DATA_FILE,
             recipe_path=recipe_path,
             # Mặc định chưa gửi: UI bật theo cấu hình đã lưu trước khi chạy.
             submit=False,
+            checkout_store=checkout_store,
         ),
+        checkout_store=checkout_store,
     )
