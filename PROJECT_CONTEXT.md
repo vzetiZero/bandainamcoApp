@@ -360,20 +360,28 @@ Chrome riêng** (profile riêng, proxy riêng, cổng debug riêng), app đọc 
 ```
 
 Action hợp lệ: `goto`, `fill`, `select`, `check`, `click`, `press`, `wait_text`,
-`wait_selector`, `sleep`, `screenshot`, `submit`. Mọi bước nhận `optional: true`
-(bỏ qua khi phần tử không có) và `requires_submit: true` (chỉ chạy khi bật submit).
+`wait_selector`, `sleep`, `screenshot`, `dismiss`, `pause`, `submit`. Mọi bước nhận
+`optional: true` (bỏ qua khi phần tử không có) và `requires_submit: true` (chỉ chạy khi
+bật submit).
+
+- `dismiss` = đóng popup: `selectors` (thử từng cái, cái nào đang hiện thì bấm, không
+  chờ timeout) + `check` (tick checkbox trước khi bấm). Checkbox Parks2 bị ẩn trong
+  `<label class="check-area">` nên `_tick()` phải thử `check()` → bấm `ancestor::label`
+  → cuối cùng set `checked` bằng JS và phát event `change`.
+- `pause` = điểm dừng an toàn: runner dừng, **không close()** phiên, trả
+  `status="paused"`, `keep_open=True`; `BrowserCampaignService._keep_open()` giữ phiên
+  trong `open_sessions` để cửa sổ Chrome còn nguyên cho người dùng làm tiếp.
 
 ### Vòng đời một lượt chạy
 
 ```
-UI: start_browser_campaign() → service.preflight()  (thiếu Chrome/recipe ⇒ dừng, không mở Chrome)
-   → QMessageBox xác nhận (nêu rõ sẽ tự bấm gửi)      → BrowserCampaignWorker
-Worker: service.run(campaign, [(email, password)], submit=…)
-   mỗi tài khoản: BrowserSession(profile riêng, proxy riêng, port riêng)
-                  → login (nếu recipe có và chưa đăng nhập)
-                  → goto link chiến dịch → chạy bước entry
-                  → submit (nếu bật) → classify_outcome() → screenshot
-   → CampaignService.mark(campaign, email) khi status ∈ {registered, already}
+UI/CLI: service.preflight() (thiếu Chrome/recipe ⇒ dừng, không mở Chrome)
+   → service.run(campaign, [(email, password)], submit=…, recipe=…)
+   mỗi tài khoản (thread riêng): BrowserSession(profile riêng, proxy riêng, port riêng)
+     → login (nếu recipe có và chưa đăng nhập)
+     → goto link chiến dịch → chạy bước entry (dismiss/select/click/…)
+     → `pause`  ⇒ giữ cửa sổ, status="paused", KHÔNG close
+     → hoặc `submit` ⇒ classify_outcome() → screenshot → CampaignService.mark()
 ```
 
 ### Quy ước bắt buộc của phần này
@@ -382,15 +390,70 @@ Worker: service.run(campaign, [(email, password)], submit=…)
    gặp dấu hiệu chặn IP thì `mark_entry_blocked()` để proxy nghỉ như luồng requests.
 2. **Một tài khoản = một profile Chrome** (`browser_profiles/<slug email>`). Không dùng
    chung profile: cookie/phiên sẽ lẫn và Chrome chỉ cho một tiến trình giữ mỗi profile.
-3. **Selector nằm trong recipe**, không hard-code trong Python. Trang đổi thì chạy
-   `--discover` rồi sửa JSON.
-4. **Mặc định không submit** (`BrowserCampaignService.submit=False` ở container); UI bật
-   theo cấu hình đã lưu và luôn hỏi xác nhận trước khi chạy.
-5. `browser_profiles/` và `browser_artifacts/` chứa cookie và dữ liệu trang thật ⇒
+3. **Mỗi tài khoản phải chạy trong thread riêng** (service tự tạo `threading.Thread`
+   + semaphore, không dùng lại thread của `ThreadPoolExecutor`). Playwright sync API
+   gắn chặt với thread đã tạo nó: tài khoản trước bị `pause` (giữ cửa sổ) mà tài khoản
+   sau chạy cùng thread thì Playwright thứ hai treo vô hạn.
+4. **Cờ chống Chrome "occluded"**: `--disable-features=CalculateNativeWinOcclusion,…`
+   + `--disable-backgrounding-occluded-windows` + `--disable-renderer-backgrounding`.
+   Thiếu chúng, cửa sổ bị cửa sổ khác che thì Chrome ngừng vẽ và `screenshot()` trả
+   ảnh trắng 100% (chỉ vài trăm byte).
+5. **Selector nằm trong recipe**, không hard-code trong Python. Trang đổi thì chạy
+   `--discover` rồi sửa JSON. Trang Parks2 lặp phần tử cho desktop và thanh dính đáy
+   (cùng `#addCart`) ⇒ runner bấm **phần tử đang hiện đầu tiên** (`_click`).
+6. **Mặc định không submit**: recipe thật hiện dừng ở `pause` (trước khi chốt đơn).
+7. `browser_profiles/` và `browser_artifacts/` chứa cookie và dữ liệu trang thật ⇒
    **git-ignored**, không commit.
-6. Playwright là phụ thuộc mới (`requirements.txt`) và `chrome-devtools-mcp` cài bằng
+8. Playwright là phụ thuộc mới (`requirements.txt`) và `chrome-devtools-mcp` cài bằng
    `npm i -g chrome-devtools-mcp`; app vẫn chạy bình thường khi thiếu MCP (chỉ mất phần
    snapshot/dò a11y).
+
+---
+
+## 3.2 Kết quả dò thật — chiến dịch 熊本店 OP-18 (2026-11-14)
+
+Chiến dịch: `ECCL00000062_20261121_1127_016` (抽選 2026/11/21–24, 申込 11/11 10:00 →
+**11/15 23:59**, 当選発表 11/18 17:00). 23 tài khoản nạp từ danh sách người dùng.
+
+### Đường đăng nhập đúng là form Parks2, không phải BNID
+
+| Tài khoản | BNID (`#mail`/`#pass`) | Form Parks2 (`#LOGINID`/`#PASSWORD`) |
+|---|---|---|
+| trinha1@hotmail.com / Boss2201 | ✗ 「メールアドレスまたはパスワードが間違っている」 | ✗ |
+| trinha3@hotmail.com / Boss2019 | — | ✓ |
+| trinha4@hotmai.com / Boss2019 | — | ✗ (sai tên miền `hotmai.com`) |
+| trinha5@outlook.com / Boss2019 | — | ✓ |
+
+⇒ recipe dùng `login.url = parks2…/login.html?request=redirect_logon&redirectTo=member_mypage.html`:
+một form duy nhất, **không có bước passkey** như BNID.
+
+### Luồng thật của trang (đã dò từng bước)
+
+```
+/login.html            #LOGINID #PASSWORD → input[type=submit][value="ログイン"]
+/member_mypage.html    đăng nhập xong (dấu hiệu: a[href*="request=logoff"])
+/item/<mã>.html        popup #kessai-method-modal (本人確認書類)
+                       → tick #confirmCheck → bấm #closePopupButton (閉じる, disabled tới khi tick)
+                       #PRIORITY_ITEMPROPERTY_CD_MATRIX_0  (種類: 日付+集合時間)
+                       #CART_AMOUNT_0 (数量, chỉ có 1)
+                       #addCart (カートに入れる) → popup có a:has-text("購入手続きに進む")
+/cart_index.html       a[onclick*="cart_seisan.html"]  (次へ)
+/cart_seisan.html      ご注文情報入力 ← **điểm pause**
+```
+
+Số liệu slot của chiến dịch: `159016_1121_1100_1` = 11/21(土) 11:00, tương tự
+`_1330`, `_1600`, `_1830`, và `1122…1124` cho các ngày sau.
+
+### Đã chạy mẫu (2/23 tài khoản, IP máy, không proxy)
+
+| Tài khoản | Kết quả | Ghi chú |
+|---|---|---|
+| trinha3@hotmail.com | `paused` — cửa sổ cổng **9400** ở `/cart_seisan.html` | Thiếu 郵便番号/都道府県/市区町村 ⇒ người dùng tự điền |
+| trinha5@outlook.com | `paused` — cửa sổ cổng **9401** ở `/cart_seisan.html` | Địa chỉ + SĐT đã có sẵn, chỉ cần bấm 入力内容を確認する |
+
+Cửa sổ được giữ nhờ `--hold-open` (tiến trình Python phải còn sống thì Chrome mới còn);
+ảnh bằng chứng ở `browser_artifacts/<ngày>/*_paused.png`.
+
 
 
 ---
@@ -842,9 +905,10 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 
 | Hạng mục | Mô tả | Mức độ ưu tiên |
 |---|---|---|
-| Recipe thật cho trang 抽選 | `recipes/parks2_campaign.json` còn `TODO`; cần chạy `browser_campaign.py --discover` với tài khoản thật rồi điền selector | **Cao** |
+| Recipe thật cho trang 抽選 | ✅ đã dò xong 2026-11-14 (mục 3.2), dừng ở `pause` trước bước chốt đơn | Xong |
+| Tự điền địa chỉ/thanh toán + chốt đơn | Recipe hiện `pause` tại `cart_seisan.html`; muốn auto hoàn toàn thì thêm bước fill địa chỉ + `submit` (nút 入力内容を確認する → 注文確定) | Trung bình |
 | Nhận diện captcha / bot-check | Chưa có; gặp captcha thì dừng và chụp ảnh để người dùng xử lý | Cao |
-| Tuần tự hoá proxy theo cổng Chrome | Hiện mỗi lượt chạy lấy proxy mới từ `next_proxy_entry()`, chưa ghim proxy theo profile | Trung bình |
+| Ghim proxy theo profile | Hiện mỗi lượt chạy lấy proxy mới từ `next_proxy_entry()`, chưa ghim proxy theo profile Chrome | Trung bình |
 
 | Hạng mục | Mô tả | Mức độ ưu tiên |
 |---|---|---|

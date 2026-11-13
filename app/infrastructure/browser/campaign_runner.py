@@ -27,6 +27,7 @@ STATUS_DRY_RUN = "dry_run"           # điền xong nhưng CHƯA bấm gửi
 STATUS_UNVERIFIED = "unverified"     # đã bấm gửi nhưng không thấy câu xác nhận
 STATUS_LOGIN_FAILED = "login_failed"
 STATUS_IP_BLOCKED = "ip_blocked"
+STATUS_PAUSED = "paused"             # dừng ở bước người dùng tự làm (thanh toán), cửa sổ để mở
 STATUS_ERROR = "error"
 
 SUCCESS_STATUSES = (STATUS_REGISTERED, STATUS_ALREADY)
@@ -46,7 +47,13 @@ class BrowserRunResult:
     last_step: str = ""
     submit_done: bool = False
     steps_done: int = 0
+    # True khi recipe dừng ở bước `pause`: cửa sổ Chrome được giữ lại cho người dùng.
+    keep_open: bool = False
     details: dict = field(default_factory=dict)
+
+
+class _PauseFlow(Exception):
+    """Điều khiển luồng: recipe yêu cầu dừng và để cửa sổ lại cho người dùng."""
 
 
 def _artifacts_dir(email):
@@ -65,7 +72,7 @@ class CampaignBrowserRunner:
 
     def __init__(self, recipe, submit=False, headless=False, proxy_manager=None,
                  chrome_path=None, profile_root=BROWSER_PROFILE_DIR,
-                 on_log=None, keep_open_seconds=0):
+                 on_log=None, keep_open_seconds=0, on_keep_open=None):
         self.recipe = recipe
         self.submit = bool(submit)
         self.headless = bool(headless)
@@ -74,6 +81,8 @@ class CampaignBrowserRunner:
         self.profile_root = profile_root
         self.on_log = on_log or (lambda message: None)
         self.keep_open_seconds = max(0, int(keep_open_seconds or 0))
+        # Nhận phiên đang mở khi recipe dừng ở bước `pause` (người dùng làm tiếp).
+        self.on_keep_open = on_keep_open or (lambda email, session: None)
 
     # ---------------- API chính ----------------
     def run(self, email, password, campaign_url, on_progress=None):
@@ -96,6 +105,15 @@ class CampaignBrowserRunner:
             return result
         try:
             self._run_flow(session, email, password, campaign_url, result, report)
+        except _PauseFlow:
+            result.status = STATUS_PAUSED
+            result.ok = True
+            result.keep_open = True
+            result.final_url = session.page.url if session.page else ""
+            result.message = ("Đã dừng trước bước thanh toán — cửa sổ Chrome giữ nguyên "
+                              "để bạn tự hoàn tất")
+            result.screenshot = session.screenshot(_screenshot_path(email, "paused"))
+            self.on_log("[%s] %s" % (email, result.message))
         except RecipeNotReady as exc:
             result.status, result.message = STATUS_ERROR, str(exc)
         except Exception as exc:  # noqa: BLE001 - một tài khoản lỗi không được giết cả mẻ
@@ -105,10 +123,13 @@ class CampaignBrowserRunner:
             result.screenshot = result.screenshot or session.screenshot(
                 _screenshot_path(email, "error"))
         finally:
-            if self.keep_open_seconds and not self.headless:
-                # Giữ cửa sổ để người dùng xem tay khi cần (chế độ gỡ lỗi).
-                session.page.wait_for_timeout(self.keep_open_seconds * 1000)
-            session.close()
+            if result.keep_open:
+                # Chuyển phiên ra ngoài: KHÔNG close(), Chrome ở lại đúng trang đang làm.
+                self.on_keep_open(email, session)
+            else:
+                if self.keep_open_seconds and not self.headless:
+                    session.page.wait_for_timeout(self.keep_open_seconds * 1000)
+                session.close()
         report(100)
         return result
 
@@ -177,29 +198,38 @@ class CampaignBrowserRunner:
         recipe = self.recipe
         login = recipe.get("login") or {}
         logged_in_selector = (login.get("logged_in_selector") or "").strip()
+        logged_out_selector = (login.get("logged_out_selector") or "").strip()
         if not login:
             return True
+
+        def looks_logged_in():
+            if logged_in_selector and self._has(session, logged_in_selector):
+                return True
+            if logged_out_selector and self._has(session, logged_out_selector):
+                return False
+            # Không có selector nào: recipe dựa vào việc form đã submit xong.
+            return True
+
         report(15)
         if campaign_url:
             session.goto(campaign_url)
-            session.page.wait_for_timeout(600)
-            if logged_in_selector and self._has(session, logged_in_selector):
+            session.page.wait_for_timeout(900)
+            if looks_logged_in():
                 self.on_log("[%s] phiên còn đăng nhập, bỏ qua bước login" % email)
                 return True
         self.on_log("[%s] đăng nhập" % email)
         session.goto(login["url"])
+        session.page.wait_for_timeout(600)
         self._run_steps(session, phase_steps(recipe, "login"), email, password, result, report)
         if not campaign_url:
             return True
         session.goto(campaign_url)
-        session.page.wait_for_timeout(800)
+        session.page.wait_for_timeout(900)
         if is_ip_lockout(session.page_text()):
             self._mark_proxy_blocked()
             return False
-        # Không khai báo logged_in_selector thì tin vào việc form đã submit xong:
-        # chỉ chặn khi rõ ràng vẫn còn ô mật khẩu.
-        if logged_in_selector:
-            return self._has(session, logged_in_selector)
+        if logged_in_selector or logged_out_selector:
+            return looks_logged_in()
         return not self._has(session, login.get("password_selector") or "input[type=password]")
 
     # ---------------- thực thi bước ----------------
@@ -218,6 +248,8 @@ class CampaignBrowserRunner:
             result.last_step = label
             try:
                 self._run_step(session, step, email, password, result)
+            except _PauseFlow:
+                raise
             except Exception as exc:  # noqa: BLE001
                 if step.get("optional"):
                     self.on_log("[%s] bỏ qua bước '%s': %s" % (email, label, exc))
@@ -226,6 +258,27 @@ class CampaignBrowserRunner:
             result.steps_done = index + 1
             report(min(84, 45 + int(35 * (index + 1) / total)))
         return False
+
+    def _click(self, page, selector, timeout):
+        """Bấm phần tử ĐANG HIỆN đầu tiên khớp selector.
+
+        Trang Parks2 lặp phần tử cho desktop và thanh dính đáy (cùng `#addCart`), nên
+        `page.click()` có thể trúng bản bị che và treo tới hết timeout.
+        """
+        locator = page.locator(selector)
+        count = locator.count()
+        for index in range(count):
+            candidate = locator.nth(index)
+            try:
+                if not candidate.is_visible():
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
+            candidate.click(timeout=timeout)
+            return True
+        # Không thấy bản hiện: để Playwright báo lỗi rõ ràng như cũ.
+        locator.first.click(timeout=timeout)
+        return True
 
     def _run_step(self, session, step, email, password, result):
         page = session.page
@@ -244,8 +297,8 @@ class CampaignBrowserRunner:
         elif action == "check":
             page.check(selector, timeout=timeout)
         elif action == "click":
-            page.click(selector, timeout=timeout)
-            page.wait_for_timeout(int(step.get("settle") or 300))
+            self._click(page, selector, timeout)
+            page.wait_for_timeout(int(step.get("settle") or 400))
         elif action == "press":
             key = step.get("key") or "Enter"
             if selector:
@@ -262,15 +315,80 @@ class CampaignBrowserRunner:
             page.wait_for_timeout(int(float(value) * 1000))
         elif action == "screenshot":
             session.screenshot(_screenshot_path(email, profile_slug(value) or "step"))
+        elif action == "dismiss":
+            self._dismiss(session, step, email, selector)
+        elif action == "pause":
+            # Recipe chỉ định điểm dừng an toàn (vd: trước bước thanh toán).
+            self.on_log("[%s] dừng theo recipe: %s" % (email, step.get("name") or "pause"))
+            raise _PauseFlow()
         elif action == "submit":
             result.submit_done = True
             self.on_log("[%s] bấm gửi đăng ký" % email)
             if selector:
-                page.click(selector, timeout=timeout)
+                self._click(page, selector, timeout)
             else:
                 page.keyboard.press("Enter")
         else:  # validate_recipe đã chặn, phòng khi recipe bị sửa tay lúc đang chạy
             raise RecipeNotReady("Bước không hỗ trợ: %s" % action)
+
+    def _dismiss(self, session, step, email, fallback_selector):
+        """Đóng popup: tick checkbox (nếu recipe khai báo) rồi bấm nút đang hiện.
+
+        Popup của Parks2 là `#kessai-method-modal` chặn toàn trang: nút 閉じる chỉ bật
+        sau khi tick 「内容確認しました。」. Checkbox đó bị ẩn trong `<label class="check-area">`
+        (ô vuông là `span.custom-checkbox`), nên `check()` của Playwright không bấm được;
+        phải bấm label bọc ngoài hoặc bật bằng JS + phát event change.
+        """
+        page = session.page
+        check_selector = render_value(step.get("check") or "", email)
+        if check_selector:
+            self._tick(session, check_selector, email)
+        selectors = step.get("selectors") or [fallback_selector]
+        for candidate in selectors:
+            if not candidate:
+                continue
+            try:
+                locator = page.locator(candidate)
+                if not locator.count():
+                    continue
+                for index in range(locator.count()):
+                    item = locator.nth(index)
+                    if not item.is_visible():
+                        continue
+                    item.click(timeout=3000)
+                    page.wait_for_timeout(500)
+                    self.on_log("[%s] đã đóng popup: %s" % (email, candidate))
+                    break
+            except Exception as exc:  # noqa: BLE001 - popup không đóng được cũng không chặn
+                self.on_log("[%s] không đóng được popup %s: %s" % (email, candidate, exc))
+
+    def _tick(self, session, selector, email):
+        """Tick checkbox kể cả khi input bị ẩn trong label custom."""
+        page = session.page
+        try:
+            if not page.locator(selector).count():
+                return
+            box = page.locator(selector).first
+            try:
+                if box.is_checked():
+                    self.on_log("[%s] %s đã tick sẵn" % (email, selector))
+                    return
+            except Exception:  # noqa: BLE001 - không phải checkbox thì bỏ qua kiểm tra
+                pass
+            try:
+                box.check(timeout=2000)
+            except Exception:
+                try:
+                    page.locator("%s >> xpath=ancestor::label[1]" % selector).first.click(
+                        timeout=3000)
+                except Exception:
+                    box.evaluate(
+                        "el => { el.checked = true;"
+                        " el.dispatchEvent(new Event('change', {bubbles: true})); }")
+            page.wait_for_timeout(400)
+            self.on_log("[%s] đã tick %s" % (email, selector))
+        except Exception as exc:  # noqa: BLE001
+            self.on_log("[%s] không tick được %s: %s" % (email, selector, exc))
 
     # ---------------- tiện ích ----------------
     @staticmethod

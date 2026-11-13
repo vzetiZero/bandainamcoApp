@@ -116,16 +116,23 @@ The **Chạy tự động bằng Chrome** group in the campaign tab drives the s
   link and saves `page.html`, `text.txt`, `elements.json` (with suggested selectors) and
   `a11y_snapshot.txt` from `chrome-devtools-mcp`, which is what you need to fill in the recipe.
 
-The shipped recipe is still a **draft**: every selector is a `TODO`, so `--check` and the preflight
-refuse to run until you replace them:
+The shipped recipe is **real** for the 熊本店 OP-18 lottery: it logs in through the Parks2 form,
+clears the 本人確認書類 popup, picks the slot, adds the item to the cart and walks to
+`ご注文情報入力`, where it **pauses and leaves the Chrome window open** for you.
 
 ```powershell
-python browser_campaign.py --discover --email you@example.com --password secret --url "<campaign link>"
-# edit recipes/parks2_campaign.json using elements.json / a11y_snapshot.txt
 python browser_campaign.py --check
-python browser_campaign.py --run --campaign "Campaign name" --email you@example.com   # fills only
-python browser_campaign.py --all --campaign "Campaign name" --submit                  # presses submit
+python browser_campaign.py --run --email you@example.com --campaign "<name>" --hold-open
+python browser_campaign.py --run --emails a@x.com,b@x.com --url "<item url>" --hold-open
+python browser_campaign.py --all --campaign "<name>" --slot 159016_1121_1330_1 --hold-open
 ```
+
+- `--hold-open` keeps the Python process alive so the paused Chrome windows stay open
+  (Ctrl+C closes them); without it the window dies with the process.
+- `--slot` overrides the 種類 value (`159016_1121_1100_1` = 11/21 11:00).
+- `--submit` only matters if the recipe uses the `submit` action instead of `pause`.
+- Logins for these accounts go through the Parks2 form, **not** BNID: the BNID page rejects
+  Parks2-only accounts with 「メールアドレス…が間違っている」.
 
 Automating sign-ups for many accounts may violate NAMCO Parks' terms of service and can get accounts
 or IPs blocked. Use it at your own risk; the manual panel above still works exactly as before.

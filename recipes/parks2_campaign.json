@@ -1,98 +1,126 @@
 {
-  "name": "parks2_campaign",
-  "_note": "BẢN NHÁP: các 'TODO' phải thay bằng selector thật dò từ trang. Chạy: python browser_campaign.py --discover --email <email> --password <pass> --url <link chiến dịch> rồi đọc browser_artifacts/discover_*/elements.json + a11y_snapshot.txt để điền vào đây.",
+  "name": "parks2_kumamoto_op18",
+  "_note": "Recipe thật, dò từ site ngày 2026-11-14. Luồng: login form Parks2 -> trang item -> đóng popup 本人確認 -> chọn 種類/数量 -> カートに入れる -> 購入手続きに進む -> cart_index -> cart_seisan (ご注文情報入力) -> PAUSE (để người dùng tự điền địa chỉ/thanh toán). Đổi ngày giờ nhận hàng ở bước 'chọn ngày/giờ' (PRIORITY_ITEMPROPERTY_CD_MATRIX_0) hoặc dùng --slot ở CLI.",
   "login": {
-    "url": "https://account.bandainamcoid.com/login.html?client_id=namcoparks_onlinestore&redirect_uri=https%3A%2F%2Fparks2.bandainamco-am.co.jp%2Fmember_regist_new.html%3Fbackto%3Dtop",
-    "logged_in_selector": "TODO-selector-chi-hien-khi-da-dang-nhap",
-    "password_selector": "input[type=password]",
+    "url": "https://parks2.bandainamco-am.co.jp/login.html?request=redirect_logon&redirectTo=member_mypage.html",
+    "logged_in_selector": "a[href*=\"request=logoff\"]",
+    "logged_out_selector": "a[href$=\"/login.html\"]",
+    "password_selector": "#PASSWORD",
     "steps": [
       {
-        "name": "chờ form login",
+        "name": "đóng banner cookie",
+        "action": "dismiss",
+        "selectors": ["#onetrust-accept-btn-handler", "#onetrust-reject-all-handler"]
+      },
+      {
+        "name": "chờ form đăng nhập",
         "action": "wait_selector",
-        "selector": "TODO-#login_id-hoac-input[name=login_id]"
+        "selector": "#LOGINID"
       },
       {
         "name": "điền email",
         "action": "fill",
-        "selector": "TODO-#login_id",
+        "selector": "#LOGINID",
         "value": "{email}"
       },
       {
         "name": "điền mật khẩu",
         "action": "fill",
-        "selector": "TODO-#password",
+        "selector": "#PASSWORD",
         "value": "{password}"
       },
       {
         "name": "bấm đăng nhập",
         "action": "click",
-        "selector": "TODO-#login-button"
+        "selector": "input[type=submit][value=\"ログイン\"]"
       },
       {
-        "name": "chờ qua trang chọn passkey",
-        "action": "wait_text",
-        "selector": "",
-        "value": "TODO-cau-tren-trang-sau-khi-dang-nhap",
-        "timeout": 20000,
-        "optional": true
-      },
-      {
-        "name": "bỏ qua tạo passkey (chọn để sau)",
-        "action": "click",
-        "selector": "TODO-nut-skip-btn-next",
-        "optional": true
+        "name": "chờ đăng nhập xong",
+        "action": "wait_selector",
+        "selector": "a[href*=\"request=logoff\"]",
+        "timeout": 25000
       }
     ]
   },
   "entry": {
     "steps": [
       {
-        "name": "chờ trang chiến dịch",
+        "name": "đóng popup 本人確認書類 (tick 内容確認しました rồi bấm 閉じる)",
+        "action": "dismiss",
+        "check": "#confirmCheck",
+        "selectors": ["#closePopupButton"]
+      },
+      {
+        "name": "chờ form chọn 種類",
         "action": "wait_selector",
-        "selector": "TODO-form-hoac-nut-dang-ky"
+        "selector": "#PRIORITY_ITEMPROPERTY_CD_MATRIX_0"
       },
       {
-        "name": "đồng ý điều khoản",
-        "action": "check",
-        "selector": "TODO-#agree",
-        "optional": true
-      },
-      {
-        "name": "chọn hạng vé / số lượng",
+        "name": "chọn ngày/giờ (11/21 11:00)",
         "action": "select",
-        "selector": "TODO-select[name=...]",
-        "value": "TODO-value",
-        "optional": true
+        "selector": "#PRIORITY_ITEMPROPERTY_CD_MATRIX_0",
+        "value": "159016_1121_1100_1"
       },
       {
-        "name": "điền email liên hệ",
-        "action": "fill",
-        "selector": "TODO-input[type=email]",
-        "value": "{email}",
-        "optional": true
+        "name": "số lượng = 1",
+        "action": "select",
+        "selector": "#CART_AMOUNT_0",
+        "value": "1"
       },
       {
-        "name": "sang bước xác nhận",
-        "action": "click",
-        "selector": "TODO-nut-xac-nhan"
-      },
-      {
-        "name": "ảnh màn hình bước xác nhận",
+        "name": "ảnh màn hình trước khi thêm giỏ",
         "action": "screenshot",
-        "value": "confirm",
+        "value": "before-cart",
         "optional": true
       },
       {
-        "name": "bấm gửi đăng ký",
-        "action": "submit",
-        "selector": "TODO-nut-gui-that",
-        "requires_submit": true
+        "name": "bấm カートに入れる",
+        "action": "click",
+        "selector": "#addCart"
+      },
+      {
+        "name": "chờ popup thêm giỏ",
+        "action": "wait_selector",
+        "selector": "a:has-text(\"購入手続きに進む\")",
+        "timeout": 20000
+      },
+      {
+        "name": "bấm 購入手続きに進む",
+        "action": "click",
+        "selector": "a:has-text(\"購入手続きに進む\")"
+      },
+      {
+        "name": "chờ trang giỏ hàng",
+        "action": "wait_selector",
+        "selector": "a[onclick*=\"cart_seisan.html\"]",
+        "timeout": 25000
+      },
+      {
+        "name": "ảnh màn hình giỏ hàng",
+        "action": "screenshot",
+        "value": "cart",
+        "optional": true
+      },
+      {
+        "name": "sang trang nhập thông tin đơn",
+        "action": "click",
+        "selector": "a[onclick*=\"cart_seisan.html\"]"
+      },
+      {
+        "name": "chờ trang ご注文情報入力",
+        "action": "wait_text",
+        "value": "ご依頼主（ご請求先）情報",
+        "timeout": 25000
+      },
+      {
+        "name": "dừng ở bước điền thông tin thanh toán (để cửa sổ lại cho người dùng)",
+        "action": "pause"
       }
     ]
   },
   "verification": {
-    "success_text": ["受付が完了", "お申し込みを受け付けました"],
-    "already_text": ["すでに応募", "既に申し込み", "重複"],
+    "success_text": ["ご注文完了", "お申し込みを受け付けました", "受付が完了"],
+    "already_text": ["すでにお申し込み", "既にお申し込み", "重複"],
     "closed_text": ["受付期間外", "受付を終了"],
     "error_text": ["エラーが発生", "アクセスが集中"]
   }

@@ -7,13 +7,13 @@ Service này là cầu nối duy nhất giữa UI/worker và hạ tầng trình 
 """
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 from app.config import (
     BROWSER_RECIPE_FILE, DEFAULT_BROWSER_PARALLEL, MAX_BROWSER_PARALLEL,
 )
 from app.domain.browser_recipe import RecipeNotReady, load_recipe, validate_recipe
-from app.infrastructure.browser.browser_session import find_chrome
+from app.infrastructure.browser.browser_session import find_chrome, profile_slug
 from app.infrastructure.browser.campaign_runner import (
     SUCCESS_STATUSES, BrowserRunResult, CampaignBrowserRunner,
 )
@@ -34,6 +34,10 @@ class BrowserCampaignService:
         self.proxy_manager = proxy_manager if proxy_manager is not None else default_proxy_manager
         self.chrome_path = chrome_path or find_chrome()
         self._log = lambda message: None
+        # Cửa sổ Chrome đang để mở cho người dùng làm tiếp (bước thanh toán).
+        self.open_sessions = {}
+        # Chặn mở quá nhiều cửa sổ cùng lúc (mỗi Chrome ~300-500MB RAM).
+        self.max_paused = 3
 
     # ---------------- kiểm tra trước khi chạy ----------------
     def preflight(self):
@@ -69,17 +73,18 @@ class BrowserCampaignService:
     # ---------------- chạy ----------------
     def run(self, campaign, accounts, on_log=None, on_progress=None, on_result=None,
             should_stop=None, submit=None, keep_open_seconds=0,
-            on_account_progress=None):
+            on_account_progress=None, recipe=None):
         """Chạy cho `accounts` = [(email, password)].
 
         `submit=None` dùng giá trị của service; `on_result(BrowserRunResult)` được
         gọi ngay khi từng tài khoản xong để UI cập nhật dòng của nó;
-        `on_account_progress(email, percent)` báo tiến trình của *từng* tài khoản.
+        `on_account_progress(email, percent)` báo tiến trình của *từng* tài khoản;
+        `recipe` để nơi gọi truyền recipe đã sửa (vd: đổi slot ngày/giờ).
         """
         log = on_log or self._log
         progress = on_progress or (lambda done, total: None)
         submit = self.submit if submit is None else bool(submit)
-        recipe = self.load_recipe()          # RecipeNotReady -> worker báo lỗi
+        recipe = recipe or self.load_recipe()   # RecipeNotReady -> worker báo lỗi
         targets = [(email, password) for email, password in accounts
                    if (email or "").strip()]
         total = len(targets)
@@ -91,38 +96,56 @@ class BrowserCampaignService:
             return results
 
         def task(email, password):
+            if len(self.open_sessions) >= self.max_paused:
+                return BrowserRunResult(
+                    email=email, status="skipped",
+                    message="Bỏ qua: đã có %d cửa sổ Chrome đang chờ bạn thanh toán"
+                            % self.max_paused)
             runner = CampaignBrowserRunner(
                 recipe=recipe, submit=submit, headless=self.headless,
                 proxy_manager=self.proxy_manager, chrome_path=self.chrome_path,
-                on_log=log, keep_open_seconds=keep_open_seconds)
+                on_log=log, keep_open_seconds=keep_open_seconds,
+                on_keep_open=self._keep_open)
             report = (lambda percent: on_account_progress(email, percent)
                       if on_account_progress else None)
             return runner.run(email, password, campaign.get("url", ""),
                               on_progress=report)
 
-        pool = ThreadPoolExecutor(max_workers=self.parallel)
-        try:
-            futures = {}
-            for email, password in targets:
-                if should_stop and should_stop():
-                    break
-                futures[pool.submit(task, email, password)] = email
-            done = 0
-            for future in as_completed(futures):
-                email = futures[future]
+        # Mỗi tài khoản chạy trong MỘT THREAD RIÊNG: Playwright sync API gắn chặt với
+        # thread đã tạo nó, nên nếu tài khoản trước bị giữ cửa sổ (bước `pause`) mà
+        # tài khoản sau chạy lại trong cùng thread thì Playwright thứ hai treo.
+        # Semaphore giữ đúng số Chrome song song; parallel=1 thì join từng cái.
+        semaphore = threading.Semaphore(self.parallel)
+        lock = threading.Lock()
+        state = {"done": 0}
+
+        def worker(email, password):
+            if should_stop and should_stop():
+                return
+            with semaphore:
                 try:
-                    result = future.result()
+                    result = task(email, password)
                 except Exception as exc:  # noqa: BLE001 - một tài khoản chết không giết mẻ
                     result = BrowserRunResult(email=email, status="error",
                                               message="Lỗi không mong đợi: %s" % exc)
+            with lock:
                 results.append(result)
                 self._record(campaign, result, log)
                 if on_result:
                     on_result(result)
-                done += 1
-                progress(done, total)
-        finally:
-            pool.shutdown(wait=True, cancel_futures=True)
+                state["done"] += 1
+                progress(state["done"], total)
+
+        threads = []
+        for email, password in targets:
+            thread = threading.Thread(target=worker, args=(email, password),
+                                      name="browser-%s" % profile_slug(email), daemon=True)
+            thread.start()
+            threads.append(thread)
+            if self.parallel == 1:
+                thread.join()
+        for thread in threads:
+            thread.join()
         return results
 
     def _record(self, campaign, result, log):
@@ -132,3 +155,25 @@ class BrowserCampaignService:
         if self.campaign_service.mark(campaign, result.email):
             log("Ghi nhận %s đã đăng ký '%s'"
                 % (result.email, campaign.get("name") or "(chưa đặt tên)"))
+
+    # ---------------- cửa sổ để mở cho người dùng ----------------
+    def _keep_open(self, email, session):
+        """Giữ phiên Chrome ở đúng trang đang làm để người dùng tự hoàn tất.
+
+        Không close() phiên này: Playwright giữ tiến trình Chrome sống theo app, nên
+        cửa sổ còn nguyên chừng nào app còn chạy.
+        """
+        self.open_sessions[email] = session
+        self._log("[%s] giữ cửa sổ Chrome ở cổng %s để bạn làm tiếp"
+                  % (email, session.port))
+
+    def close_open_sessions(self):
+        """Đóng các cửa sổ đang giữ (gọi khi người dùng bấm đóng hoặc thoát app)."""
+        count = len(self.open_sessions)
+        for email, session in list(self.open_sessions.items()):
+            try:
+                session.close()
+            except Exception:  # noqa: BLE001 - đóng cửa sổ không được thì bỏ qua
+                pass
+            self.open_sessions.pop(email, None)
+        return count

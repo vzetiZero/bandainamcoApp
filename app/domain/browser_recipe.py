@@ -39,6 +39,8 @@ Bước (`steps`) là dict có `action`:
 | `wait_selector` | `selector` | chờ phần tử xuất hiện |
 | `sleep` | `value` (giây) | nghỉ có chủ đích (trang chờ JS) |
 | `screenshot` | `value` (tên file) | chụp ảnh mốc giữa luồng |
+| `dismiss` | `selectors` (danh sách) hoặc `selector`, tuỳ chọn `check` | đóng popup/quảng cáo: nếu có `check` thì tick checkbox đó trước, rồi bấm cái đang hiện (không có thì bỏ qua, không chờ timeout) |
+| `pause` | — | **dừng tại đây và để cửa sổ Chrome mở** cho người dùng tự làm tiếp (vd: bước thanh toán) |
 | `submit` | — | điểm bấm gửi: **chỉ chạy khi bật submit** |
 
 Mọi bước có thể đặt `"optional": true` để bỏ qua khi phần tử không có (ví dụ
@@ -49,7 +51,7 @@ import json
 
 STEP_ACTIONS = (
     "goto", "fill", "select", "check", "click", "press",
-    "wait_text", "wait_selector", "sleep", "screenshot", "submit",
+    "wait_text", "wait_selector", "sleep", "screenshot", "dismiss", "pause", "submit",
 )
 # Trường bắt buộc theo từng action.
 REQUIRED_FIELDS = {
@@ -63,6 +65,8 @@ REQUIRED_FIELDS = {
     "wait_selector": ("selector",),
     "sleep": ("value",),
     "screenshot": ("value",),
+    "dismiss": (),
+    "pause": (),
     "submit": (),
 }
 # Dấu hiệu recipe còn là bản nháp: chưa dò selector thật trên trang.
@@ -107,6 +111,15 @@ def _steps_errors(steps, where):
             value = step.get(field)
             if value in (None, ""):
                 errors.append("%s (%s): thiếu '%s'" % (label, action, field))
+        if action == "dismiss":
+            selectors = step.get("selectors")
+            if not step.get("selector") and not selectors:
+                errors.append("%s (dismiss): cần 'selector' hoặc 'selectors'" % label)
+            elif selectors is not None and not isinstance(selectors, list):
+                errors.append("%s (dismiss): 'selectors' phải là danh sách" % label)
+            for text in (selectors or []):
+                if isinstance(text, str) and any(mark in text for mark in PLACEHOLDER_MARKERS):
+                    errors.append("%s (dismiss): '%s' còn là placeholder" % (label, text))
         for field in ("selector", "value"):
             text = step.get(field)
             if isinstance(text, str) and any(mark in text for mark in PLACEHOLDER_MARKERS):

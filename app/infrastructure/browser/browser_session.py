@@ -119,7 +119,12 @@ class BrowserSession:
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-blink-features=AutomationControlled",
-            "--disable-features=Translate,MediaRouter",
+            # Chrome coi cửa sổ bị cửa sổ khác che là "occluded" rồi ngừng vẽ, làm
+            # `page.screenshot()` trả ảnh trắng. Tắt hẳn cơ chế đó + throttling.
+            "--disable-features=CalculateNativeWinOcclusion,Translate,MediaRouter",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+            "--disable-background-timer-throttling",
             "--window-size=1280,900",
         ]
         launch = {

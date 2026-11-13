@@ -21,6 +21,7 @@ khác (đăng nhập, điền form, phân loại kết quả, ảnh chụp) nằ
 import argparse
 import io
 import sys
+import time
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
@@ -112,7 +113,16 @@ def command_run(args):
         return 2
 
     accounts = load_accounts(args.accounts_file)
-    if args.email:
+    if args.emails:
+        wanted = [item.strip() for item in args.emails.split(",") if item.strip()]
+        targets = []
+        for email in wanted:
+            record = find_account(accounts, email)
+            if record is None:
+                print("Không có %s trong %s" % (email, args.accounts_file))
+                return 2
+            targets.append((record.get("email", email), record.get("password", "")))
+    elif args.email:
         password = args.password
         if password is None:
             record = find_account(accounts, args.email)
@@ -135,6 +145,14 @@ def command_run(args):
         print(message)
         return 3
 
+    recipe = service.load_recipe()
+    if args.slot:
+        # Đổi ngày/giờ nhận hàng mà không phải sửa file JSON.
+        for step in recipe.get("entry", {}).get("steps", []):
+            if step.get("selector") == "#PRIORITY_ITEMPROPERTY_CD_MATRIX_0":
+                step["value"] = args.slot
+        print("Slot override:", args.slot)
+
     def on_result(result):
         print("\n[%s] %s -> %s" % ("OK" if result.ok else "LỖI", result.email,
                                    result.status))
@@ -147,12 +165,25 @@ def command_run(args):
     results = service.run(campaign, targets, on_log=log,
                           on_progress=lambda done, total: print("  ... %d/%d" % (done, total)),
                           on_result=on_result, submit=args.submit,
-                          keep_open_seconds=args.keep_open)
+                          keep_open_seconds=args.keep_open, recipe=recipe)
     ok_count = sum(1 for result in results if result.ok)
     print("\n" + "=" * 60)
     print("Tổng %d tài khoản: %d thành công, %d lỗi" % (len(results), ok_count,
                                                        len(results) - ok_count))
     print("=" * 60)
+
+    if service.open_sessions:
+        print("\n%d cửa sổ Chrome đang để mở cho bạn làm tiếp:" % len(service.open_sessions))
+        for email, session in service.open_sessions.items():
+            print("  %-28s cổng %s  profile %s" % (email, session.port, session.profile_dir))
+        if args.hold_open:
+            print("\nGiữ tiến trình sống để các cửa sổ này KHÔNG bị đóng. Ctrl+C để kết thúc.")
+            try:
+                while True:
+                    time.sleep(3)
+            except KeyboardInterrupt:
+                print("\nĐóng cửa sổ...")
+                service.close_open_sessions()
     return 0 if ok_count == len(results) else 1
 
 
@@ -169,6 +200,8 @@ def main():
     parser.add_argument("--campaign", help="Tên chiến dịch (khớp một phần)")
     parser.add_argument("--url", help="Link chiến dịch (thay cho --campaign)")
     parser.add_argument("--email", help="Email tài khoản cần chạy")
+    parser.add_argument("--emails", help="Nhiều tài khoản, cách nhau bằng dấu phẩy "
+                                         "(mật khẩu lấy từ accounts_data.json)")
     parser.add_argument("--password", help="Mật khẩu (bỏ trống thì lấy từ accounts_data.json)")
     parser.add_argument("--accounts-file", default="accounts_data.json")
     parser.add_argument("--submit", action="store_true",
@@ -177,14 +210,19 @@ def main():
     parser.add_argument("--parallel", type=int, default=1, help="Số Chrome song song (1-3)")
     parser.add_argument("--keep-open", type=int, default=0,
                         help="Giữ cửa sổ Chrome mở thêm N giây sau mỗi tài khoản")
+    parser.add_argument("--hold-open", action="store_true",
+                        help="Sau khi chạy, giữ tiến trình sống để cửa sổ Chrome ở bước "
+                             "thanh toán không bị đóng (Ctrl+C để đóng)")
+    parser.add_argument("--slot", help="Mã ngày/giờ nhận hàng, vd 159016_1121_1100_1 "
+                                       "(ghi đè bước chọn 種類 trong recipe)")
     parser.add_argument("--hold", type=int, default=3,
                         help="Khi dò: chờ N giây trên trang trước khi chụp")
     parser.add_argument("--no-mcp", action="store_true",
                         help="Khi dò: không lấy snapshot qua chrome-devtools-mcp")
     args = parser.parse_args()
 
-    if args.email is None and (args.discover or args.run):
-        parser.error("--discover/--run cần --email")
+    if args.email is None and args.emails is None and (args.discover or args.run):
+        parser.error("--discover/--run cần --email hoặc --emails")
     if args.discover:
         return command_discover(args)
     if args.check:
