@@ -164,12 +164,26 @@ và đặt ở khung nhật ký bên phải bảng.
 
 ### 2.3 Tab 3 — Chiến dịch (chi tiết ở mục 3)
 
+Bố cục gọn: **một hàng lọc** (lọc + tìm + tổng số) → **một hàng nút** (Thêm/Sửa/Mở trang/
+Xóa/Export) → bảng → 2 nhóm thao tác **Đăng ký thủ công** và **Chạy tự động bằng Chrome**
+(mỗi nhóm 2 hàng: điều khiển + nút, kèm 1 nhãn trạng thái). Không còn đoạn ghi chú dài
+trong thân tab: nội dung giải thích nằm ở `setToolTip` của tab/nhóm/nút.
+
 ### 2.4 Tab 4 — Cấu hình (chi tiết ở mục 4)
 
-Tab Cấu hình có nhóm **Kiểm tra đồng thời** (`_create_concurrency_group()`, `QSpinBox`
-`max_workers_input` chỉ hiển thị số 1..`MAX_CONCURRENCY` của `app/config.py`, không suffix).
+Ba nhóm, mỗi nhóm 1–2 hàng:
+
+| Nhóm | Nội dung |
+|---|---|
+| **Trình duyệt tự động** | `Recipe:` (đường dẫn + Chọn file + Kiểm tra) · hàng 2: `Chrome ẩn (headless)` + `Luồng kiểm tra` (`max_workers_input`, 1..`MAX_CONCURRENCY`) + nhãn `Recipe OK/lỗi` |
+| **Thông tin đặt hàng & thanh toán** | `Nhập / sửa thông tin...` + `Xoá` + nhãn ngắn (`**** 4242 · 熊本県… · đã mã hoá`); chi tiết địa chỉ/trường thiếu nằm ở tooltip |
+| **Proxy** | `Bật proxy` + `Chế độ` · `File:` + Chọn/Tải lại · 4 nút (Kiểm tra/Mở file/DS tạm nghỉ/Bỏ tạm nghỉ) + nhãn trạng thái · bảng proxy |
+
 `on_concurrency_changed()` gán ngay `self.max_workers` và ghi QSettings `max_workers`, nên
 lần chạy batch kế tiếp dùng đúng số luồng vừa chọn. Mặc định `DEFAULT_CONCURRENCY = 5`.
+(Tab không còn tiêu đề lớn “Cấu hình” vì tên tab đã đủ; nhóm **Kiểm tra đồng thời** cũ đã
+gộp vào **Trình duyệt tự động**.)
+
 
 ---
 
@@ -996,4 +1010,100 @@ Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
 8. Phần trình duyệt: mỗi tài khoản một profile/port riêng (mục 3.1), selector nằm trong
    `recipes/*.json` chứ không hard-code, `browser_profiles/` + `browser_artifacts/` là
    git-ignored, và `submit` mặc định phải đi qua xác nhận của người dùng.
+9. **UI gọn, ít chữ:** không đặt đoạn giải thích dài trong thân tab/nhóm. Nội dung hướng dẫn
+   đặt ở `setToolTip()` của tab/nhóm/nút; nhãn trạng thái chỉ 1 dòng ngắn (chi tiết ở
+   tooltip hoặc thanh trạng thái). Thông báo kết quả dùng `status_bar.showMessage()` thay vì
+   popup, chỉ dùng `QMessageBox` khi cần người dùng quyết định (xác nhận xoá/chạy submit)
+   hoặc khi có lỗi phải đọc kỹ.
 
+
+---
+
+## 12. UI web (Next.js + theme-ui) và API FastAPI
+
+Từ 2026-11-14 giao diện chính là **web**: Next.js (App Router) + `theme-ui`, còn Python giữ
+toàn bộ logic. Bản PySide6 vẫn còn trong repo (dùng được) nhưng là **legacy**.
+
+```
+Browser ──HTTP/JSON──> api/ (FastAPI)  ──> app/services ──> app/domain
+                           │                      │
+                           │                      └─> adapters: requests (BandaiAuth/Name),
+                           │                          Playwright + chrome-devtools-mcp,
+                           │                          AccountRepository, CheckoutStore
+                           └─ JobRegistry (thread nền) + LogBuffer
+```
+
+### Thành phần mới
+
+| File | Trách nhiệm |
+|---|---|
+| `server.py` | chạy API: `python server.py` → http://127.0.0.1:8787 (docs `/docs`) |
+| `api/app.py` | toàn bộ route REST + CORS; không chứa nghiệp vụ, chỉ gọi `ApiState` |
+| `api/state.py` | wiring `ApiState`, `LogBuffer` (nhật ký + `seq`), `JobRegistry` (job nền), các job: kiểm tra tài khoản, đổi tên, kiểm tra proxy, chạy chiến dịch, dò trang |
+| `app/infrastructure/file_settings.py` | `FileSettingsStore`: `web_settings.json`, cùng interface với `SettingsStore` (Qt) — lần đầu chép từ `ui_settings.ini` |
+| `web/` | Next.js 14 App Router + theme-ui 0.17: `app/`, `components/`, `lib/api.js`, `lib/hooks.js`, `theme.js` |
+| `start_api.bat` / `start_web.bat` | chạy API (8787) và giao diện (3000) |
+
+### Chạy
+
+```powershell
+python -m pip install -r requirements.txt          # + fastapi, uvicorn
+python server.py --no-browser                       # API  :8787
+cd web; npm install; npm run dev                    # UI   :3000
+```
+
+`NEXT_PUBLIC_API` đổi địa chỉ API (mặc định `http://127.0.0.1:8787`).
+
+### Trang
+
+| Trang | Nội dung |
+|---|---|
+| `/` Tổng quan | số tài khoản/chiến dịch, tình trạng recipe, hồ sơ đặt hàng, job gần đây, cửa sổ Chrome đang chờ |
+| `/accounts` | bảng tài khoản (lọc/tìm/chọn), kiểm tra một hoặc tất cả, thêm hàng loạt `email|password`, đổi tên, xoá |
+| `/campaigns` | CRUD chiến dịch, chọn dòng để xem đăng ký, chạy bằng Chrome (slot, submit, địa chỉ riêng từng tài khoản) |
+| `/settings` | proxy (bật/chế độ/file/kiểm tra/tạm nghỉ), recipe (đường dẫn + editor JSON), Chrome ẩn, số Chrome song song, luồng kiểm tra, hồ sơ đặt hàng & thẻ |
+
+### Job (tác vụ dài)
+
+`POST /api/accounts/check`, `/api/browser/run`, `/api/proxy/check`, `/api/browser/discover`
+đều trả `{id, status: "running", ...}`; UI poll `GET /api/jobs/{id}` mỗi ~0.9s tới khi
+`status != running`. Job chạy trong thread nền, log đổ vào `LogBuffer`
+(`GET /api/logs?after=<seq>`), proxy cũng đổ về đó qua `set_event_sink`.
+
+### Quy ước bảo mật của API
+
+1. **Không trả mật khẩu**: `account_public()` bỏ `password`, thêm `has_password`.
+2. **Không trả số thẻ/CVV**: `GET /api/checkout` trả `**** **** **** 1234` + `has_card`;
+   `PUT /api/checkout` với `card_number`/`card_cvv` rỗng nghĩa là **giữ giá trị cũ**.
+3. Địa chỉ riêng của từng tài khoản (`GET /api/accounts/{email}`) lấy từ hồ sơ Parks2;
+   khi chạy chiến dịch bật `use_account_address` để mỗi tài khoản dùng địa chỉ của chính nó
+   (`ApiState.account_checkout_vars` → `BrowserCampaignService.run(profile_for=...)`).
+4. `PUT /api/browser/recipe` validate trước khi ghi — sửa selector là sửa dữ liệu, không
+   phải sửa code.
+
+### Khác biệt so với bản desktop
+
+| | Desktop (legacy) | Web |
+|---|---|---|
+| UI | PySide6 | Next.js + theme-ui |
+| Tuỳ chọn | `ui_settings.ini` (QSettings) | `web_settings.json` (`FileSettingsStore`) |
+| Tác vụ dài | `QThread` + `Signal` | `JobRegistry` + polling |
+| Nhật ký | panel trong app | `LogBuffer` + dock nhật ký (poll) |
+| Dữ liệu chung | `accounts_data.json`, `checkout_profile.json`, `recipes/` | như trên |
+
+`web_settings.json` lần đầu được tạo sẽ chép giá trị từ `ui_settings.ini` (best-effort),
+nên danh sách chiến dịch đang dùng không bị mất khi chuyển sang web.
+
+### Kiểm thử
+
+```python
+# API: TestClient với file tạm (không gọi mạng)
+from api.app import create_app; from api.state import ApiState
+# - health/accounts/campaigns/settings/checkout/proxy
+# - PUT /api/checkout rồi assert "4242424242424242" không xuất hiện trong JSON trả về
+# - job proxy với danh sách rỗng: status -> done
+```
+
+Luồng trình duyệt qua API đã được chạy thử bằng recipe `data:text/html…` + `pause`:
+job `done`, item `paused`, `GET /api/browser/sessions` trả cổng/profile,
+`POST /api/browser/sessions/close` đóng được.

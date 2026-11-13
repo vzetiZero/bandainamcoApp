@@ -15,3 +15,8 @@ browser_profiles/
 browser_artifacts/
 recipes/*.local.json
 checkout_profile.json
+web/node_modules/
+web/.next/
+web/out/
+web/.eslintcache
+web_settings.json

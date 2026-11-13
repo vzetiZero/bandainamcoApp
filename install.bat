@@ -61,6 +61,20 @@ if errorlevel 1 (
     call npm.cmd i -g chrome-devtools-mcp
 )
 
+:: Web UI (Next.js) + API FastAPI
+echo [INFO] Dang cai FastAPI/uvicorn cho API...
+python -m pip install fastapi "uvicorn[standard]"
+
+echo [INFO] Dang cai thu vien cho giao dien web (web/)...
+where node >nul 2>&1
+if errorlevel 1 (
+    echo [CANH BAO] Chua co Node.js - khong cai duoc giao dien web.
+) else (
+    pushd "%~dp0web"
+    call npm.cmd install --no-fund --no-audit
+    popd
+)
+
 
 echo.
 echo ==========================================

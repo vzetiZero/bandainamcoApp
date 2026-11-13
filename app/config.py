@@ -70,3 +70,16 @@ CHROME_DEVTOOLS_MCP_NPM_PACKAGE = "chrome-devtools-mcp"
 # Hồ sơ đặt hàng + thẻ thanh toán người dùng nhập trong tab Cấu hình: file riêng,
 # git-ignored, từng giá trị mã hoá bằng DPAPI của Windows (xem checkout_store.py).
 CHECKOUT_FILE = os.path.join(APP_ROOT, "checkout_profile.json")
+
+# ============================================================
+# API / UI WEB (Next.js)
+# ============================================================
+# Bản web lưu tuỳ chọn ở JSON riêng (không cần Qt); lần đầu sẽ chép giá trị từ
+# `ui_settings.ini` của bản desktop để không mất danh sách chiến dịch.
+WEB_SETTINGS_FILE = os.path.join(APP_ROOT, "web_settings.json")
+API_HOST = os.environ.get("API_HOST", "127.0.0.1")
+API_PORT = int(os.environ.get("API_PORT", "8787"))
+# Cho phép origin của Next.js dev server gọi API.
+API_CORS_ORIGINS = os.environ.get(
+    "API_CORS_ORIGINS",
+    "http://localhost:3000,http://127.0.0.1:3000").split(",")

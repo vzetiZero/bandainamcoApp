@@ -72,8 +72,11 @@ REQUIRED_FIELDS = {
     "pause": (),
     "submit": (),
 }
-# Dấu hiệu recipe còn là bản nháp: chưa dò selector thật trên trang.
-PLACEHOLDER_MARKERS = ("TODO", "<", "selector-that")
+# Dấu hiệu recipe còn là bản nháp. `<` chỉ xét trong selector (chuỗi CSS thật hiếm khi
+# có `<`), còn `value` có thể là HTML/URL hợp lệ.
+SELECTOR_MARKERS = ("TODO", "<", "selector-that")
+VALUE_MARKERS = ("TODO", "selector-that")
+PLACEHOLDER_MARKERS = SELECTOR_MARKERS
 VERIFICATION_KEYS = ("success_text", "already_text", "closed_text", "error_text")
 # Giá trị của `when` bị coi là "không bật".
 FALSE_VALUES = frozenset({"", "0", "false", "no", "off", "none", "null"})
@@ -135,9 +138,9 @@ def _steps_errors(steps, where):
             errors.append("%s: 'when' phải là chuỗi (vd \"{zip}\")" % label)
         if "only_if_empty" in step and not isinstance(step.get("only_if_empty"), bool):
             errors.append("%s: 'only_if_empty' phải là true/false" % label)
-        for field in ("selector", "value"):
+        for field, markers in (("selector", SELECTOR_MARKERS), ("value", VALUE_MARKERS)):
             text = step.get(field)
-            if isinstance(text, str) and any(mark in text for mark in PLACEHOLDER_MARKERS):
+            if isinstance(text, str) and any(mark in text for mark in markers):
                 errors.append("%s (%s): '%s' còn là placeholder — dò lại bằng "
                               "browser_campaign.py --discover" % (label, action, text))
     return errors

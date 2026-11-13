@@ -1,0 +1,18 @@
+{
+  "name": "namco-account-manager-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Giao diện Next.js + theme-ui cho backend Python của NAMCO Account Manager",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "^14.2.35",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "theme-ui": "0.17.1"
+  }
+}

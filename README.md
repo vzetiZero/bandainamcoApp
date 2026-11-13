@@ -21,17 +21,45 @@ Windows desktop app for organizing BANDAI NAMCO ID / NAMCO Parks accounts.
 
 ## Setup
 
-Requires Python 3.10 or later on Windows, plus Google Chrome and Node.js LTS for the browser part.
+Two processes: the Python API (all logic) and the Next.js UI.
 
 ```powershell
-python -m pip install -r requirements.txt
-cmd /c "npm.cmd i -g chrome-devtools-mcp"
-python account_manager.py
+python -m pip install -r requirements.txt          # requests, PySide6, playwright, fastapi, uvicorn
+cmd /c "npm.cmd i -g chrome-devtools-mcp"          # MCP server for page discovery
+
+python server.py --no-browser                       # API  → http://127.0.0.1:8787  (docs: /docs)
+cd web
+npm install
+npm run dev                                         # UI   → http://localhost:3000
 ```
 
+Or double-click `start_api.bat` and `start_web.bat`. Requires Python 3.10+, Node.js LTS and
+Google Chrome.
+
 `npm.ps1` is blocked by the default PowerShell execution policy, so call `npm.cmd` (or run
-`Set-ExecutionPolicy -Scope Process Bypass` first). You can also run `install.bat` and
-`start.bat`.
+`Set-ExecutionPolicy -Scope Process Bypass` first). The legacy PySide6 desktop app still runs
+with `python account_manager.py` / `start.bat`.
+
+Set `NEXT_PUBLIC_API` if the API is not on `http://127.0.0.1:8787`.
+
+## Architecture
+
+```
+Browser ──HTTP/JSON──> api/ (FastAPI)  ──> app/services ──> app/domain
+                          │                     └─> adapters: requests (Bandai auth/name),
+                          │                        Playwright + chrome-devtools-mcp,
+                          │                        AccountRepository, CheckoutStore
+                          └─ JobRegistry (background threads) + LogBuffer
+```
+
+Long tasks (checking accounts, running a campaign in Chrome, probing proxies, page discovery)
+are jobs: `POST` returns a job id and the UI polls `/api/jobs/{id}`. Logs stream through
+`/api/logs?after=<seq>`.
+
+Pages: `/` overview, `/accounts`, `/campaigns`, `/settings` (proxy, recipe editor, Chrome
+options, order/payment profile). The API never returns passwords, card numbers or CVVs;
+`GET /api/checkout` shows `**** **** **** 1234`, and leaving the card fields blank on save keeps
+the stored values.
 
 ## Project structure
 

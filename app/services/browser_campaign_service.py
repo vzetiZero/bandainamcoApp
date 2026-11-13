@@ -77,13 +77,15 @@ class BrowserCampaignService:
     # ---------------- chạy ----------------
     def run(self, campaign, accounts, on_log=None, on_progress=None, on_result=None,
             should_stop=None, submit=None, keep_open_seconds=0,
-            on_account_progress=None, recipe=None):
+            on_account_progress=None, recipe=None, profile_for=None):
         """Chạy cho `accounts` = [(email, password)].
 
         `submit=None` dùng giá trị của service; `on_result(BrowserRunResult)` được
         gọi ngay khi từng tài khoản xong để UI cập nhật dòng của nó;
         `on_account_progress(email, percent)` báo tiến trình của *từng* tài khoản;
-        `recipe` để nơi gọi truyền recipe đã sửa (vd: đổi slot ngày/giờ).
+        `recipe` để nơi gọi truyền recipe đã sửa (vd: đổi slot ngày/giờ);
+        `profile_for(email)` trả biến hồ sơ riêng của tài khoản (địa chỉ khác nhau) —
+        giá trị khác rỗng sẽ đè lên hồ sơ dùng chung.
         """
         log = on_log or self._log
         progress = on_progress or (lambda done, total: None)
@@ -113,11 +115,19 @@ class BrowserCampaignService:
                     email=email, status="skipped",
                     message="Bỏ qua: đã có %d cửa sổ Chrome đang chờ bạn thanh toán"
                             % self.max_paused)
+            # Hồ sơ riêng của tài khoản (nếu có) đè lên hồ sơ dùng chung.
+            account_card = dict(card)
+            if profile_for:
+                try:
+                    extra = profile_for(email) or {}
+                    account_card.update({key: value for key, value in extra.items() if value})
+                except Exception as exc:  # noqa: BLE001 - thiếu hồ sơ riêng không chặn chạy
+                    log("Không lấy được hồ sơ riêng của %s: %s" % (email, exc))
             runner = CampaignBrowserRunner(
                 recipe=recipe, submit=submit, headless=self.headless,
                 proxy_manager=self.proxy_manager, chrome_path=self.chrome_path,
                 on_log=log, keep_open_seconds=keep_open_seconds,
-                on_keep_open=self._keep_open, card=card)
+                on_keep_open=self._keep_open, card=account_card)
             report = (lambda percent: on_account_progress(email, percent)
                       if on_account_progress else None)
             return runner.run(email, password, campaign.get("url", ""),
