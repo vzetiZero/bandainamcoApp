@@ -102,8 +102,15 @@ class BrowserCampaignService:
         gaps = checkout_domain.missing_required(profile)
         if gaps:
             log("Thiếu thông tin bắt buộc (sẽ để trống cho bạn điền): %s" % ", ".join(gaps))
-        targets = [(email, password) for email, password in accounts
-                   if (email or "").strip()]
+        targets = []
+        for account in accounts:
+            # `(email, password)` như cũ, hoặc `(email, password, token)` khi tài khoản
+            # có serial code riêng (token) cho chiến dịch 景品ミニゲーム.
+            email = account[0]
+            password = account[1] if len(account) > 1 else ""
+            token = account[2] if len(account) > 2 else ""
+            if (email or "").strip():
+                targets.append((email, password, token or ""))
         total = len(targets)
         results = []
         log("Chiến dịch '%s': %d tài khoản, %s, %d Chrome song song"
@@ -112,7 +119,7 @@ class BrowserCampaignService:
         if not total:
             return results
 
-        def task(email, password):
+        def task(email, password, token=""):
             if len(self.open_sessions) >= self.max_paused:
                 return BrowserRunResult(
                     email=email, status="skipped",
@@ -120,6 +127,8 @@ class BrowserCampaignService:
                             % self.max_paused)
             # Hồ sơ riêng của tài khoản (nếu có) đè lên hồ sơ dùng chung.
             account_card = dict(card)
+            # Token của tài khoản = serial code 景品ミニゲーム; recipe dùng `{token}`.
+            account_card["token"] = token
             if profile_for:
                 try:
                     extra = profile_for(email) or {}
@@ -148,12 +157,12 @@ class BrowserCampaignService:
         lock = threading.Lock()
         state = {"done": 0}
 
-        def worker(email, password):
+        def worker(email, password, token=""):
             if should_stop and should_stop():
                 return
             with semaphore:
                 try:
-                    result = task(email, password)
+                    result = task(email, password, token)
                 except Exception as exc:  # noqa: BLE001 - một tài khoản chết không giết mẻ
                     result = BrowserRunResult(email=email, status="error",
                                               message="Lỗi không mong đợi: %s" % exc)
@@ -166,8 +175,8 @@ class BrowserCampaignService:
                 progress(state["done"], total)
 
         threads = []
-        for email, password in targets:
-            thread = threading.Thread(target=worker, args=(email, password),
+        for email, password, token in targets:
+            thread = threading.Thread(target=worker, args=(email, password, token),
                                       name="browser-%s" % profile_slug(email), daemon=True)
             thread.start()
             threads.append(thread)

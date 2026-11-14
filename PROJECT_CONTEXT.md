@@ -137,9 +137,15 @@ Hai chế độ giờ nhận (`app/domain/campaign_slot.py`):
   (`recipe_for(email)` trong `BrowserCampaignService.run`), nên không phải sửa recipe
   dùng chung; kết quả job ghi kèm slot của từng tài khoản.
 
-Mã hàng (種類) lấy từ link chiến dịch (`/item/<MÃ>.html`), không dùng cứng 159016. Với
-chiến dịch có mã khác dạng (`…_<MMDD>_<HHMM>_1`), dán danh sách mã thật vào ô "mã 種類"
-(`slot_codes`) rồi vẫn chia ngẫu nhiên được.
+Mã hàng (種類) của chiến dịch 熊本店 là **159016** (xác nhận từ chính trang item: option
+`159016_<MMDD>_<HHMM>_1`, ngày 11/21–11/24 × 11:00/13:30/16:00/18:30).
+
+Chiến dịch 景品ミニゲーム (vd `ECCL00000062…`) cần **serial code riêng từng tài khoản**:
+trang có modal `#ITEM_SERIAL_CODE_MODAL` + nút `a.js_serial-check-btn`
+(シリアルコードを送信), lỗi hiện ở `#ITEM_SERIAL_CHECK_MODAL_ERROR_MESSAGE`. Serial lấy từ
+trường **`token`** của tài khoản (`email|password|token`) và được truyền vào recipe qua
+`{token}` (context của `render_value`); tài khoản không có token thì các bước đó tự bỏ qua
+(`"when": "{token}"`).
 
 Khi bước `select` không chọn được (mã 種類 không có trong trang), runner dừng ngay và báo
 **danh sách mã trang đang có**; popup lỗi của site (vd

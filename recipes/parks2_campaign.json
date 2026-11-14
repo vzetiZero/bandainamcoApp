@@ -10,7 +10,10 @@
       {
         "name": "đóng banner cookie",
         "action": "dismiss",
-        "selectors": ["#onetrust-accept-btn-handler", "#onetrust-reject-all-handler"]
+        "selectors": [
+          "#onetrust-accept-btn-handler",
+          "#onetrust-reject-all-handler"
+        ]
       },
       {
         "name": "chờ form đăng nhập",
@@ -54,7 +57,9 @@
         "name": "đóng popup 本人確認書類 (tick 内容確認しました rồi bấm 閉じる)",
         "action": "dismiss",
         "check": "#confirmCheck",
-        "selectors": ["#closePopupButton"]
+        "selectors": [
+          "#closePopupButton"
+        ]
       },
       {
         "name": "chờ form chọn 種類",
@@ -83,6 +88,32 @@
         "name": "bấm カートに入れる",
         "action": "click",
         "selector": "#addCart"
+      },
+      {
+        "action": "wait_selector",
+        "selector": "#ITEM_SERIAL_CODE_MODAL",
+        "timeout": 10000,
+        "when": "{token}",
+        "name": "chờ ô serial code (chiến dịch 景品ミニゲーム)"
+      },
+      {
+        "action": "fill",
+        "selector": "#ITEM_SERIAL_CODE_MODAL",
+        "value": "{token}",
+        "when": "{token}",
+        "name": "nhập serial code của tài khoản"
+      },
+      {
+        "action": "click",
+        "selector": "a.js_serial-check-btn",
+        "settle": 1500,
+        "when": "{token}",
+        "name": "gửi serial code (シリアルコードを送信)"
+      },
+      {
+        "action": "screenshot",
+        "value": "serial-code",
+        "when": "{token}"
       },
       {
         "name": "chờ popup thêm giỏ",
@@ -270,11 +301,27 @@
     ]
   },
   "verification": {
-    "success_text": ["ご注文完了", "ご注文ありがとうございました", "注文を承りました", "受付が完了"],
-    "already_text": ["すでにお申し込み", "既にお申し込み", "重複", "購入済み"],
-    "closed_text": ["受付期間外", "受付を終了", "販売期間外"],
-    "error_text": ["エラーが発生", "アクセスが集中", "画面操作の誤り"]
+    "success_text": [
+      "ご注文完了",
+      "ご注文ありがとうございました",
+      "注文を承りました",
+      "受付が完了"
+    ],
+    "already_text": [
+      "すでにお申し込み",
+      "既にお申し込み",
+      "重複",
+      "購入済み"
+    ],
+    "closed_text": [
+      "受付期間外",
+      "受付を終了",
+      "販売期間外"
+    ],
+    "error_text": [
+      "エラーが発生",
+      "アクセスが集中",
+      "画面操作の誤り"
+    ]
   }
 }
-
-

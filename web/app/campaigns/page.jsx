@@ -139,12 +139,9 @@ export default function CampaignsPage() {
       .map((account) => account.email)
   }, [runEmails, visibleAccounts])
 
-  // Mã hàng (種類) lấy từ link chiến dịch: `…/item/ECCL00000062.html` -> ECCL00000062.
-  // Nhờ vậy đổi chiến dịch là đổi mã hàng, không còn dùng cứng 159016.
-  const slotItem = useMemo(() => {
-    const match = String(current?.url || '').match(/\/item\/([^/?#]+?)\.html/)
-    return match ? match[1] : SLOT_ITEM
-  }, [current])
+  // Mã hàng của chiến dịch 熊本店 (159016) — kiểm tra lại bằng danh sách mã 種類 của
+  // trang nếu site đổi; đổi mã thì dùng ô "Mã slot khác" hoặc mã 種類 dán tay.
+  const slotItem = SLOT_ITEM
 
   const missingDate = slotMode === 'random' && !slotDate
   const slotCodes = useMemo(

@@ -505,13 +505,14 @@ class ApiState:
         for email in emails:
             account = self.accounts.find(email)
             if account:
-                targets.append((account.get("email", email), account.get("password", "")))
+                targets.append((account.get("email", email), account.get("password", ""),
+                                account.get("token", "")))
         campaign = dict(campaign or {})
         if url_override:
             campaign["url"] = url_override
 
         # Mỗi tài khoản một slot (hoặc cùng một mã nếu người dùng chọn cố định).
-        slots = campaign_slot.plan_slots([email for email, _password in targets],
+        slots = campaign_slot.plan_slots([target[0] for target in targets],
                                          fixed="" if slot_random else slot,
                                          item=slot_item, date_text=slot_date,
                                          times=slot_times or (),
@@ -549,7 +550,8 @@ class ApiState:
 
         # Cửa sổ cũ của chính tài khoản đó (đang pause) phải đóng trước: Chrome chỉ cho
         # một tiến trình giữ mỗi profile, nếu không sẽ báo "Opening in existing session".
-        for email, _password in targets:
+        for target in targets:
+            email = target[0]
             session = self.browser.open_sessions.pop(email, None)
             if session is not None:
                 try:

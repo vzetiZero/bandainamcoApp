@@ -39,11 +39,16 @@ SETTLE_AFTER_SUBMIT_MS = 2500
 # Gặp là dừng ngay kèm câu thông báo, thay vì chờ 20s cho bước sau rồi báo timeout khó hiểu.
 SITE_ERROR_HINTS = (
     "商品コードが指定されていません",
+    "シリアルコードが正しくありません",
+    "既に使用されています",
+    "使用済みのシリアルコード",
     "在庫がありません",
     "販売期間外",
     "受付を終了しました",
     "アクセスが集中しております",
 )
+# Ô chứa câu lỗi cụ thể của site (vd serial code sai/đã dùng): đọc trước khi dò chữ.
+SITE_ERROR_SELECTORS = ("#ITEM_SERIAL_CHECK_MODAL_ERROR_MESSAGE",)
 
 
 @dataclass
@@ -480,10 +485,25 @@ class CampaignBrowserRunner:
 
     def _raise_site_error(self, session):
         """Popup lỗi của site sau một cú bấm -> dừng ngay, không chờ timeout."""
+        page = session.page
+        for selector in SITE_ERROR_SELECTORS:
+            message = self._element_text(page, selector)
+            if message:
+                raise _SiteError("Site báo: 「%s」" % message)
         text = session.page_text()
         for hint in SITE_ERROR_HINTS:
             if hint in text:
                 raise _SiteError("Site báo: 「%s」" % hint)
+
+    def _element_text(self, page, selector):
+        """Chữ đang hiện trong một ô ('' nếu không có/không đọc được)."""
+        try:
+            locator = page.locator(selector)
+            if not locator.count():
+                return ""
+            return locator.first.inner_text(timeout=1000).strip()
+        except Exception:  # noqa: BLE001
+            return ""
 
     def _missing_card_tokens(self, step):
         """Biến `{card_*}` mà recipe dùng nhưng hồ sơ thanh toán chưa có."""
