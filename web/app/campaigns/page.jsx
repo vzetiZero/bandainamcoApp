@@ -16,6 +16,34 @@ const SLOT_ITEM = '159016'
 const SLOT_TIMES = ['11:00', '13:30', '16:00', '18:30']
 const SLOT_RECIPE_DEFAULT = '159016_1121_1100_1'
 
+// Tải file về máy (Electron cũng dùng được): tạo Blob rồi bấm link ẩn.
+function downloadFile(filename, text, mime) {
+  const blob = new Blob([text], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+function toCsv(rows, headers) {
+  const escape = (value) => {
+    const text = String(value ?? '')
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+  }
+  return [headers.map(escape).join(','),
+    ...rows.map((row) => row.map(escape).join(','))].join('\r\n')
+}
+
+function exportName(prefix, campaignName) {
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')
+  const name = String(campaignName || 'chien-dich').replace(/[^\w.-]+/g, '-').slice(0, 40)
+  return `${prefix}-${name}-${stamp}`
+}
+
 // Ô chọn ngày/giờ của trình duyệt dùng dạng "YYYY-MM-DDTHH:MM", còn API lưu
 // "YYYY-MM-DD HH:MM" — đổi qua lại ở đây để form luôn hiện đúng giá trị đã lưu.
 const toInputTime = (text) => {
@@ -35,6 +63,8 @@ export default function CampaignsPage() {
   const [message, setMessage] = useState('')
   const [selectedRow, setSelectedRow] = useState(null)
   const [signups, setSignups] = useState([])
+  // Form "Thêm chiến dịch" là menu gập: chỉ mở khi bấm nút, đỡ chiếm chỗ danh sách.
+  const [showAddForm, setShowAddForm] = useState(false)
   const [runEmails, setRunEmails] = useState([])
   const [groupFilter, setGroupFilter] = useState('')
   // Ngày nhận hàng (slot) chọn bằng ô ngày + khung giờ; chế độ "ngẫu nhiên" thì mỗi
@@ -94,6 +124,53 @@ export default function CampaignsPage() {
   const current = selectedRow !== null ? items[selectedRow] : null
   const running = job?.status === 'running'
 
+  // ----- kết quả lượt chạy gần nhất: đếm + xuất TXT/CSV -----
+  const runItems = job?.items || []
+  const runSummary = useMemo(() => {
+    const summary = { ok: 0, error: 0, waiting: 0, other: 0 }
+    runItems.forEach((item) => {
+      const status = item.status || (item.ok ? 'registered' : 'error')
+      if (status === 'registered' || status === 'already') summary.ok += 1
+      else if (['error', 'login_failed', 'ip_blocked'].includes(status)) summary.error += 1
+      else if (status === 'paused' || status === 'dry_run') summary.waiting += 1
+      else summary.other += 1
+    })
+    return summary
+  }, [runItems])
+
+  const exportRun = (format) => {
+    const headers = ['email', 'trang_thai', 'ngay_gio', 'proxy', 'thong_bao', 'url']
+    const rows = runItems.map((item) => [
+      item.email || '',
+      item.status || (item.ok ? 'registered' : 'error'),
+      item.slot || '',
+      item.proxy || '',
+      item.message || '',
+      item.url || '',
+    ])
+    const name = exportName('ket-qua', current?.name)
+    if (format === 'csv') {
+      downloadFile(`${name}.csv`, '\ufeff' + toCsv(rows, headers), 'text/csv;charset=utf-8')
+    } else {
+      downloadFile(`${name}.txt`,
+        [headers.join(' | '), ...rows.map((row) => row.join(' | '))].join('\n'),
+        'text/plain;charset=utf-8')
+    }
+  }
+
+  const exportSignups = (format) => {
+    const headers = ['email', 'thoi_diem']
+    const rows = signups.map((signup) => [signup.email || '', signup.at || ''])
+    const name = exportName('da-dang-ky', current?.name)
+    if (format === 'csv') {
+      downloadFile(`${name}.csv`, '\ufeff' + toCsv(rows, headers), 'text/csv;charset=utf-8')
+    } else {
+      downloadFile(`${name}.txt`,
+        [headers.join(' | '), ...rows.map((row) => row.join(' | '))].join('\n'),
+        'text/plain;charset=utf-8')
+    }
+  }
+
   const loadSignups = async (row) => {
     setSelectedRow(row)
     const result = await get(`/api/campaigns/${row}/signups`).catch(() => ({ signups: [] }))
@@ -125,6 +202,7 @@ export default function CampaignsPage() {
       }
       setForm(BLANK)
       setEditingRow(null)
+      setShowAddForm(false)
       campaigns.reload()
       setMessage('Đã lưu chiến dịch')
     } catch (err) {
@@ -308,24 +386,56 @@ export default function CampaignsPage() {
           sx={{ mb: 3 }}
           title={job ? job.title : 'Thông báo'}
           subtitle={job ? job.message || job.status : message}
+          actions={job ? (
+            <Flex sx={{ gap: 2 }}>
+              <Button
+                variant="ghost"
+                sx={{ fontSize: 1, px: 2, py: 1 }}
+                onClick={() => exportRun('txt')}
+                disabled={!runItems.length}
+              >
+                Xuất TXT
+              </Button>
+              <Button
+                variant="ghost"
+                sx={{ fontSize: 1, px: 2, py: 1 }}
+                onClick={() => exportRun('csv')}
+                disabled={!runItems.length}
+              >
+                Xuất CSV
+              </Button>
+            </Flex>
+          ) : null}
         >
           {job && (
             <Box sx={{ p: 4 }}>
               <Progress done={job.done} total={job.total} />
-              <Box sx={{ mt: 3, maxHeight: 180, overflowY: 'auto' }}>
-                {job.items.map((item) => (
-                  <Flex key={item.email} sx={{ gap: 2, fontSize: 1, py: '2px' }}>
+              <Flex sx={{ gap: 4, mt: 2, fontSize: 1, flexWrap: 'wrap' }}>
+                <Text sx={{ color: 'ok' }}>Thành công: {runSummary.ok}</Text>
+                <Text sx={{ color: 'error' }}>Lỗi: {runSummary.error}</Text>
+                <Text sx={{ color: 'muted' }}>Đã điền/chờ: {runSummary.waiting}</Text>
+                <Text sx={{ color: 'muted' }}>Khác: {runSummary.other}</Text>
+              </Flex>
+              <Box sx={{ mt: 2, maxHeight: 220, overflowY: 'auto' }}>
+                {runItems.map((item, index) => (
+                  <Flex
+                    key={`${item.email}-${index}`}
+                    sx={{ gap: 2, fontSize: 1, py: '2px', alignItems: 'center' }}
+                  >
                     <StatusBadge status={item.status || (item.ok ? 'ok' : 'error')} />
-                    <Text sx={{ minWidth: 200 }}>{item.email}</Text>
-                  {item.slot && (
-                    <Text sx={{ color: 'muted', fontSize: 0 }}>
-                      {item.slot.split('_').slice(1, 3).join(' ')}
-                    </Text>
-                  )}
+                    <Text sx={{ minWidth: 190 }}>{item.email}</Text>
+                    {item.slot && (
+                      <Text sx={{ color: 'muted', fontSize: 0 }}>
+                        {item.slot.split('_').slice(1, 3).join(' ')}
+                      </Text>
+                    )}
                     <Text sx={{ color: 'muted', flex: 1 }}>{item.message}</Text>
                     {item.proxy && <Text sx={{ color: 'muted', fontSize: 0 }}>{item.proxy}</Text>}
                   </Flex>
                 ))}
+                {!runItems.length && (
+                  <Text sx={{ fontSize: 1, color: 'muted' }}>Chưa có tài khoản nào chạy xong.</Text>
+                )}
               </Box>
             </Box>
           )}
@@ -341,7 +451,23 @@ export default function CampaignsPage() {
         }}
       >
         <Box>
-          <Panel title="Danh sách chiến dịch" subtitle="Bấm một dòng để chọn và xem đăng ký">
+          <Panel
+            title="Danh sách chiến dịch"
+            subtitle="Bấm một dòng để chọn và xem đăng ký"
+            actions={
+              <Button
+                variant={showAddForm ? 'ghost' : 'secondary'}
+                onClick={() => {
+                  setShowAddForm(!showAddForm)
+                  setEditingRow(null)
+                  setForm(BLANK)
+                }}
+                sx={{ fontSize: 1, px: 2, py: 1 }}
+              >
+                {showAddForm ? 'Đóng form' : '+ Thêm chiến dịch'}
+              </Button>
+            }
+          >
             <ScrollTable maxHeight="min(46vh, 420px)">
                 <thead>
                   <tr>
@@ -388,7 +514,20 @@ export default function CampaignsPage() {
             {items.length === 0 && <Empty>Chưa có chiến dịch nào.</Empty>}
           </Panel>
 
-          <Panel sx={{ mt: 3 }} title={editingRow === null ? 'Thêm chiến dịch' : `Sửa dòng ${editingRow + 1}`}>
+          {(showAddForm || editingRow !== null) && (
+          <Panel
+            sx={{ mt: 3 }}
+            title={editingRow === null ? 'Thêm chiến dịch' : `Sửa dòng ${editingRow + 1}`}
+            actions={
+              <Button
+                variant="ghost"
+                onClick={() => { setShowAddForm(false); setEditingRow(null); setForm(BLANK) }}
+                sx={{ fontSize: 1, px: 2, py: 1 }}
+              >
+                Đóng
+              </Button>
+            }
+          >
             <Box sx={{ p: 3, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3 }}>
               <TextField
                 label="Tên chiến dịch"
@@ -433,6 +572,7 @@ export default function CampaignsPage() {
               </Flex>
             </Box>
           </Panel>
+          )}
         </Box>
 
         <Box>
@@ -635,11 +775,11 @@ export default function CampaignsPage() {
                   Chọn cả nhóm
                 </Button>
               </Flex>
-              {doneCount > 0 && (
-                <Text sx={{ display: 'block', fontSize: 0, color: 'muted', mb: 2 }}>
-                  Đã ẩn {doneCount} tài khoản đã đăng ký — xem ở tab &quot;Đã đăng ký&quot;.
-                </Text>
-              )}
+              <Text sx={{ display: 'block', fontSize: 0, color: 'muted', mb: 2 }}>
+                Tổng {visibleAccounts.length} tài khoản · đã đăng ký {doneCount} · chưa chạy{' '}
+                {openAccounts.length}
+                {doneCount > 0 ? ' (đã ẩn khỏi danh sách, xem tab "Đã đăng ký")' : ''}
+              </Text>
               <Box sx={{ maxHeight: 220, overflowY: 'auto', border: '1px solid', borderColor: 'border', borderRadius: 'small', p: 2 }}>
                 {openAccounts.map((account) => (
                   <label
@@ -693,11 +833,31 @@ export default function CampaignsPage() {
             title="Đã đăng ký"
             subtitle={current ? `${signups.length} tài khoản đã đăng ký` : 'Chọn chiến dịch'}
             actions={
-              sessions.data?.items?.length ? (
-                <Button variant="secondary" onClick={closeSessions} sx={{ fontSize: 1, px: 2, py: 1 }}>
-                  Đóng {sessions.data.items.length} cửa sổ
+              <Flex sx={{ gap: 2 }}>
+                <Button
+                  variant="ghost"
+                  sx={{ fontSize: 1, px: 2, py: 1 }}
+                  onClick={() => exportSignups('txt')}
+                  disabled={!signups.length}
+                  title="Tải danh sách đã đăng ký (.txt)"
+                >
+                  TXT
                 </Button>
-              ) : null
+                <Button
+                  variant="ghost"
+                  sx={{ fontSize: 1, px: 2, py: 1 }}
+                  onClick={() => exportSignups('csv')}
+                  disabled={!signups.length}
+                  title="Tải danh sách đã đăng ký (.csv)"
+                >
+                  CSV
+                </Button>
+                {sessions.data?.items?.length ? (
+                  <Button variant="secondary" onClick={closeSessions} sx={{ fontSize: 1, px: 2, py: 1 }}>
+                    Đóng {sessions.data.items.length} cửa sổ
+                  </Button>
+                ) : null}
+              </Flex>
             }
           >
             {signups.length > 0 ? (
