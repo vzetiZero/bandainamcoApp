@@ -179,12 +179,42 @@ export default function CampaignsPage() {
   )
   // Mã dùng để chia ngẫu nhiên: mã tick từ trang, không có thì dùng mã dán tay.
   const activeCodes = pickedCodes.length ? pickedCodes : pastedCodes
+  // Mã slot thực gửi lên ở chế độ cố định: mã dán tay > ghép từ ngày/giờ > rỗng (recipe).
+  const slotValue = useMemo(() => {
+    const custom = slotCode.trim()
+    if (custom) return custom
+    if (!slotDate) return ''
+    const [, month, day] = slotDate.split('-')
+    if (!month || !day) return ''
+    return `${slotItem}_${month}${day}_${slotTime.replace(':', '')}_1`
+  }, [slotCode, slotDate, slotTime, slotItem])
+  // Ngày/giờ mà trang thật sự có (11/21, 11/22, ...) — dùng để cảnh báo khi chọn ngày lạ.
+  const availableDates = useMemo(
+    () => Array.from(new Set(siteOptions.map((option) => option.when.split(' ')[0]))),
+    [siteOptions],
+  )
+  // Chế độ cố định: mã ghép từ ô ngày/giờ phải có trong trang, không thì chặn chạy.
+  const slotValueAvailable = !slotValue || !siteOptions.length
+    || siteOptions.some((option) => option.value === slotValue)
+  const fixedUnavailable = slotMode === 'fixed' && !slotValueAvailable
+  // Mã dán tay mà trang không có (chỉ cảnh báo, vẫn cho chạy nếu người dùng biết rõ).
+  const unknownPasted = useMemo(
+    () => (siteOptions.length && !pickedCodes.length
+      ? pastedCodes.filter((code) => !siteOptions.some((option) => option.value === code))
+      : []),
+    [pastedCodes, pickedCodes.length, siteOptions],
+  )
   const needsCodes = slotMode === 'random' && activeCodes.length === 0
   const canRun = Boolean(current) && runTargets.length > 0 && !needsCodes
+    && !fixedUnavailable
 
   const startRun = async () => {
     if (!current) {
       setMessage('Bấm một dòng trong "Danh sách chiến dịch" để chọn chiến dịch trước')
+      return
+    }
+    if (fixedUnavailable) {
+      setMessage(`Trang không có ngày/giờ đó — chỉ có ${availableDates.join(', ') || 'danh sách chưa đọc được'}`)
       return
     }
     if (needsCodes) {
@@ -222,16 +252,6 @@ export default function CampaignsPage() {
     await post('/api/browser/sessions/close')
     sessions.reload()
   }
-
-  // Mã slot thực gửi lên: mã dán tay > mã ghép từ ngày/giờ > rỗng (theo recipe).
-  const slotValue = useMemo(() => {
-    const custom = slotCode.trim()
-    if (custom) return custom
-    if (!slotDate) return ''
-    const [, month, day] = slotDate.split('-')
-    if (!month || !day) return ''
-    return `${slotItem}_${month}${day}_${slotTime.replace(':', '')}_1`
-  }, [slotCode, slotDate, slotTime, slotItem])
 
   return (
     <Box>
@@ -390,7 +410,7 @@ export default function CampaignsPage() {
           <Panel title="Chạy tự động" subtitle={current ? current.name : 'Bấm một dòng trong "Danh sách chiến dịch" để chọn'}>
             <Box sx={{ p: 3 }}>
               <Text sx={{ display: 'block', fontSize: 1, color: 'muted', mb: 1 }}>
-                Ngày nhận hàng
+                Kiểu chọn ngày/giờ nhận
               </Text>
               <Select
                 value={slotMode}
@@ -400,27 +420,43 @@ export default function CampaignsPage() {
                 <option value="fixed">Giờ cố định — mọi tài khoản cùng giờ</option>
                 <option value="random">Giờ ngẫu nhiên — mỗi tài khoản một giờ</option>
               </Select>
-              <Flex sx={{ gap: 2, mb: 1 }}>
-                <Input
-                  type="date"
-                  value={slotDate}
-                  onChange={(event) => setSlotDate(event.target.value)}
-                  sx={{ flex: 1 }}
-                />
-                {slotMode === 'fixed' && (
-                  <Select
-                    value={slotTime}
-                    onChange={(event) => setSlotTime(event.target.value)}
-                    disabled={!slotDate}
-                    sx={{ maxWidth: 108 }}
-                    title="Khung giờ nhận tại cửa hàng"
-                  >
-                    {SLOT_TIMES.map((time) => (
-                      <option key={time} value={time}>{time}</option>
-                    ))}
-                  </Select>
-                )}
-              </Flex>
+              {slotMode === 'fixed' && (
+                <>
+                  <Text sx={{ display: 'block', fontSize: 1, color: 'muted', mb: 1 }}>
+                    Ngày nhận hàng
+                  </Text>
+                  <Flex sx={{ gap: 2, mb: 1 }}>
+                    <Input
+                      type="date"
+                      value={slotDate}
+                      onChange={(event) => setSlotDate(event.target.value)}
+                      sx={{ flex: 1 }}
+                    />
+                    <Select
+                      value={slotTime}
+                      onChange={(event) => setSlotTime(event.target.value)}
+                      disabled={!slotDate}
+                      sx={{ maxWidth: 108 }}
+                      title="Khung giờ nhận tại cửa hàng"
+                    >
+                      {SLOT_TIMES.map((time) => (
+                        <option key={time} value={time}>{time}</option>
+                      ))}
+                    </Select>
+                  </Flex>
+                  {availableDates.length > 0 && (
+                    <Text sx={{ display: 'block', fontSize: 0, color: 'muted', mb: 1 }}>
+                      Ngày có trên trang: {availableDates.join(', ')}
+                    </Text>
+                  )}
+                  {!slotValueAvailable && (
+                    <Text sx={{ display: 'block', fontSize: 1, color: 'error', mb: 1 }}>
+                      Trang không có ngày/giờ này — chọn một trong các ngày ở trên,
+                      hoặc đổi sang chế độ ngẫu nhiên để dùng danh sách của trang.
+                    </Text>
+                  )}
+                </>
+              )}
               {slotMode === 'random' && (
                 <Box sx={{ border: '1px solid', borderColor: 'border', borderRadius: 'small', p: 2, mb: 1 }}>
                   <Flex sx={{ alignItems: 'center', gap: 2, mb: 1 }}>
@@ -498,6 +534,11 @@ export default function CampaignsPage() {
                       bg: 'surface', color: 'text',
                     }}
                   />
+                  {unknownPasted.length > 0 && (
+                    <Text sx={{ display: 'block', fontSize: 0, color: 'error', mt: 1 }}>
+                      {unknownPasted.length} mã dán vào không có trên trang ({unknownPasted[0]}…)
+                    </Text>
+                  )}
                 </Box>
               )}
               <Text sx={{ display: 'block', fontSize: 0, color: 'muted', mb: 2 }}>
