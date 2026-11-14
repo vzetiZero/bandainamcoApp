@@ -8,6 +8,7 @@ Service này là cầu nối duy nhất giữa UI/worker và hạ tầng trình 
 import json
 import os
 import threading
+import time
 
 from app.config import (
     BROWSER_RECIPE_FILE, DEFAULT_BROWSER_PARALLEL, MAX_BROWSER_PARALLEL,
@@ -78,7 +79,7 @@ class BrowserCampaignService:
     def run(self, campaign, accounts, on_log=None, on_progress=None, on_result=None,
             should_stop=None, submit=None, keep_open_seconds=0,
             on_account_progress=None, recipe=None, recipe_for=None, profile_for=None,
-            clear_cart=False, use_proxy=None):
+            clear_cart=False, use_proxy=None, should_pause=None):
         """Chạy cho `accounts` = [(email, password)].
 
         `submit=None` dùng giá trị của service; `on_result(BrowserRunResult)` được
@@ -158,6 +159,11 @@ class BrowserCampaignService:
         state = {"done": 0}
 
         def worker(email, password, token=""):
+            # Tạm dừng: chờ ở đây giữa các tài khoản (tài khoản đang chạy vẫn xong).
+            while should_pause and should_pause():
+                if should_stop and should_stop():
+                    return
+                time.sleep(0.4)
             if should_stop and should_stop():
                 return
             with semaphore:

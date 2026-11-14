@@ -208,6 +208,10 @@ Khi chạy nhiều tài khoản: `use_account_address` lấy địa chỉ từ h
 
 `GET /api/health`, `/api/accounts`, `/api/campaigns`, `/api/settings`, `/api/proxy`,
 `/api/checkout`, `/api/logs?after=<seq>`, `/api/jobs[/{id}]`, `/api/browser/sessions`.
+Điều khiển lượt chạy: `POST /api/jobs/{id}/pause` (tài khoản đang chạy xong rồi chờ),
+`POST /api/jobs/{id}/resume` (chạy tiếp phần còn lại), `POST /api/jobs/{id}/cancel` (dừng hẳn).
+`Job` có cờ `_pause`/`_stop`; `BrowserCampaignService.run(should_pause=…)` cho worker chờ
+giữa các tài khoản nên không cắt ngang một đơn đang gửi.
 Chiến dịch: `POST/PUT/DELETE /api/campaigns[/{row}]`, `/api/campaigns/{row}/signups`,
 `GET /api/campaigns/export`. Nhóm tài khoản: `/api/accounts/groups`,
 `/api/accounts/group` (xem §2b).

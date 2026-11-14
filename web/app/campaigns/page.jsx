@@ -87,7 +87,7 @@ export default function CampaignsPage() {
   const [clearCart, setClearCart] = useState(false)
   const [useProxy, setUseProxy] = useState(true)
 
-  const { job, track } = useJob(() => {
+  const { job, track, setJob } = useJob(() => {
     campaigns.reload()
     sessions.reload()
     accounts.reload()
@@ -155,6 +155,40 @@ export default function CampaignsPage() {
       downloadFile(`${name}.txt`,
         [headers.join(' | '), ...rows.map((row) => row.join(' | '))].join('\n'),
         'text/plain;charset=utf-8')
+    }
+  }
+
+  // ----- điều khiển lượt chạy: tạm dừng / chạy tiếp / dừng hẳn -----
+  const pauseRun = async () => {
+    if (!job) return
+    try {
+      const updated = await post(`/api/jobs/${job.id}/pause`)
+      setJob(updated)
+      setMessage('Đã tạm dừng — tài khoản đang chạy sẽ xong rồi dừng lại')
+    } catch (err) {
+      setMessage(err.message)
+    }
+  }
+
+  const resumeRun = async () => {
+    if (!job) return
+    try {
+      const updated = await post(`/api/jobs/${job.id}/resume`)
+      setJob(updated)
+      setMessage('Chạy tiếp các tài khoản còn lại')
+    } catch (err) {
+      setMessage(err.message)
+    }
+  }
+
+  const stopRun = async () => {
+    if (!job) return
+    if (!window.confirm('Dừng hẳn lượt chạy này? Các tài khoản còn lại sẽ không chạy.')) return
+    try {
+      await post(`/api/jobs/${job.id}/cancel`)
+      setMessage('Đã dừng hẳn lượt chạy')
+    } catch (err) {
+      setMessage(err.message)
     }
   }
 
@@ -525,7 +559,27 @@ export default function CampaignsPage() {
           title={job ? job.title : 'Thông báo'}
           subtitle={job ? job.message || job.status : message}
           actions={job ? (
-            <Flex sx={{ gap: 2 }}>
+            <Flex sx={{ gap: 2, alignItems: 'center' }}>
+              {job.status === 'running' && !job.paused && (
+                <Button
+                  variant="secondary"
+                  sx={{ fontSize: 1, px: 2, py: 1 }}
+                  onClick={pauseRun}
+                  title="Dừng sau tài khoản đang chạy, rồi chọn Tiếp tục hoặc Dừng hẳn"
+                >
+                  Dừng
+                </Button>
+              )}
+              {job.status === 'running' && job.paused && (
+                <>
+                  <Button sx={{ fontSize: 1, px: 2, py: 1 }} onClick={resumeRun}>
+                    Tiếp tục
+                  </Button>
+                  <Button variant="danger" sx={{ fontSize: 1, px: 2, py: 1 }} onClick={stopRun}>
+                    Dừng hẳn
+                  </Button>
+                </>
+              )}
               <Button
                 variant="ghost"
                 sx={{ fontSize: 1, px: 2, py: 1 }}
@@ -548,6 +602,13 @@ export default function CampaignsPage() {
           {job && (
             <Box sx={{ p: 4 }}>
               <Progress done={job.done} total={job.total} />
+              {job.paused && (
+                <Text sx={{ display: 'block', mt: 2, fontSize: 1, color: 'warn' }}>
+                  Đang tạm dừng sau tài khoản hiện tại — bấm “Tiếp tục” để chạy tiếp{' '}
+                  {Math.max(0, (job.total || 0) - (job.done || 0))} tài khoản còn lại,
+                  hoặc “Dừng hẳn” để bỏ phần còn lại.
+                </Text>
+              )}
               <Flex sx={{ gap: 4, mt: 2, fontSize: 1, flexWrap: 'wrap' }}>
                 <Text sx={{ color: 'ok' }}>Thành công: {runSummary.ok}</Text>
                 <Text sx={{ color: 'error' }}>Lỗi: {runSummary.error}</Text>

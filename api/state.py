@@ -102,6 +102,8 @@ class Job:
     started_at: str = field(default_factory=lambda: datetime.now().strftime("%H:%M:%S"))
     finished_at: str = ""
     _stop: bool = False
+    # Tạm dừng giữa các tài khoản (tài khoản đang chạy vẫn chạy cho xong).
+    _pause: bool = False
 
     def as_dict(self):
         return {
@@ -109,6 +111,7 @@ class Job:
             "total": self.total, "done": self.done, "status": self.status,
             "message": self.message, "items": self.items, "result": self.result,
             "started_at": self.started_at, "finished_at": self.finished_at,
+            "paused": bool(self._pause),
         }
 
 
@@ -155,8 +158,27 @@ class JobRegistry:
         if job is None or job.status != "running":
             return False
         job._stop = True
+        job._pause = False
         job.status = "cancelled"
         self._logs.add("%s: đã yêu cầu dừng" % job.title, "warn")
+        return True
+
+    def pause(self, job_id) -> bool:
+        """Tạm dừng sau khi tài khoản đang chạy xong; các tài khoản sau chờ."""
+        job = self.get(job_id)
+        if job is None or job.status != "running" or job._pause:
+            return False
+        job._pause = True
+        self._logs.add("%s: tạm dừng sau tài khoản đang chạy" % job.title, "warn")
+        return True
+
+    def resume(self, job_id) -> bool:
+        """Chạy tiếp các tài khoản còn lại sau khi tạm dừng."""
+        job = self.get(job_id)
+        if job is None or job.status != "running" or not job._pause:
+            return False
+        job._pause = False
+        self._logs.add("%s: chạy tiếp" % job.title, "ok")
         return True
 
     def recent(self, limit=10):
@@ -576,6 +598,7 @@ class ApiState:
             results = self.browser.run(
                 campaign, targets, on_log=lambda message: self.logs.add(message),
                 on_result=on_result, should_stop=lambda: job._stop,
+                should_pause=lambda: job._pause,
                 submit=submit, recipe=recipe, recipe_for=recipe_for,
                 profile_for=profile_for,
                 clear_cart=clear_cart, use_proxy=use_proxy)

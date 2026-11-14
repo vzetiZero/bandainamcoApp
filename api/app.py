@@ -87,6 +87,22 @@ def create_app(state: Optional[ApiState] = None) -> FastAPI:
             raise HTTPException(409, "Job không chạy hoặc đã kết thúc")
         return {"ok": True}
 
+    @api.post("/api/jobs/{job_id}/pause")
+    def job_pause(job_id: str):
+        """Tạm dừng: tài khoản đang chạy xong thì các tài khoản sau chờ."""
+        current = st()
+        if not current.jobs.pause(job_id):
+            raise HTTPException(409, "Job không chạy hoặc đã tạm dừng")
+        return current.jobs.get(job_id).as_dict()
+
+    @api.post("/api/jobs/{job_id}/resume")
+    def job_resume(job_id: str):
+        """Chạy tiếp các tài khoản còn lại sau khi tạm dừng."""
+        current = st()
+        if not current.jobs.resume(job_id):
+            raise HTTPException(409, "Job không ở trạng thái tạm dừng")
+        return current.jobs.get(job_id).as_dict()
+
     # ========================================================
     # TÀI KHOẢN
     # ========================================================
