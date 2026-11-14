@@ -34,6 +34,16 @@ STATUS_ERROR = "error"
 SUCCESS_STATUSES = (STATUS_REGISTERED, STATUS_ALREADY)
 # Nghỉ ngắn sau cú bấm gửi/nút cuối để trang kịp trả lời trước khi đọc kết quả.
 SETTLE_AFTER_SUBMIT_MS = 2500
+# Popup lỗi site hiện ngay sau một cú bấm — thường là do chưa chọn được 種類 (mã slot
+# không có trong trang: 景品ミニゲームの商品コードが指定されていません) hoặc hết hàng.
+# Gặp là dừng ngay kèm câu thông báo, thay vì chờ 20s cho bước sau rồi báo timeout khó hiểu.
+SITE_ERROR_HINTS = (
+    "商品コードが指定されていません",
+    "在庫がありません",
+    "販売期間外",
+    "受付を終了しました",
+    "アクセスが集中しております",
+)
 
 
 @dataclass
@@ -59,6 +69,10 @@ class _PauseFlow(Exception):
 
 class _ProxyRetry(Exception):
     """Proxy lỗi hoặc IP bị chặn: thử lại bằng proxy kế tiếp (nếu còn)."""
+
+
+class _SiteError(Exception):
+    """Site hiện thông báo lỗi ngay sau thao tác: dừng lượt chạy của tài khoản đó."""
 
 
 def _artifacts_dir(email):
@@ -158,6 +172,12 @@ class CampaignBrowserRunner:
             self.on_log("[%s] %s" % (email, result.message))
         except RecipeNotReady as exc:
             result.status, result.message = STATUS_ERROR, str(exc)
+            result.screenshot = session.screenshot(_screenshot_path(email, "recipe-error"))
+            self.on_log("[%s] %s" % (email, result.message))
+        except _SiteError as exc:
+            result.status, result.message = STATUS_ERROR, str(exc)
+            result.screenshot = session.screenshot(_screenshot_path(email, "site-error"))
+            self.on_log("[%s] %s" % (email, result.message))
         except Exception as exc:  # noqa: BLE001 - một tài khoản lỗi không được giết cả mẻ
             result.status = STATUS_ERROR
             result.message = "Lỗi khi chạy: %s" % exc
@@ -439,6 +459,32 @@ class CampaignBrowserRunner:
         except Exception:  # noqa: BLE001
             return ""
 
+    def _option_values(self, page, selector, limit=12):
+        """Các `value` mà ô chọn đang có (để báo lỗi kèm lựa chọn thật của trang)."""
+        try:
+            values = page.locator(selector).first.evaluate(
+                "(el) => Array.from(el.options || []).map(o => o.value).filter(Boolean)")
+        except Exception:  # noqa: BLE001
+            return []
+        return list(values or [])[:limit]
+
+    def _require_selected(self, session, email, selector, value):
+        """Select xong mà ô vẫn trống -> dừng với danh sách mã trang đang có."""
+        if self._current_value(session.page, selector):
+            return
+        options = self._option_values(session.page, selector)
+        available = ", ".join(options) if options else "(không đọc được danh sách mã)"
+        raise RecipeNotReady(
+            "Không chọn được '%s' cho %s: ô %s vẫn trống. Mã trang đang có: %s"
+            % (value, email, selector, available))
+
+    def _raise_site_error(self, session):
+        """Popup lỗi của site sau một cú bấm -> dừng ngay, không chờ timeout."""
+        text = session.page_text()
+        for hint in SITE_ERROR_HINTS:
+            if hint in text:
+                raise _SiteError("Site báo: 「%s」" % hint)
+
     def _missing_card_tokens(self, step):
         """Biến `{card_*}` mà recipe dùng nhưng hồ sơ thanh toán chưa có."""
         if (self.card or {}).get("card_number"):
@@ -480,6 +526,10 @@ class CampaignBrowserRunner:
                 self.on_log("[%s] giữ nguyên %s (đã chọn sẵn)" % (email, selector))
                 return
             self._select(page, selector, value, timeout)
+            if value:
+                # Mã không có trong trang (vd 種類 của chiến dịch khác) thì ô chọn vẫn
+                # trống -> báo ngay kèm mã trang đang có, khỏi phải đoán.
+                self._require_selected(session, email, selector, value)
         elif action == "check":
             guard = step.get("only_if_empty")
             if isinstance(guard, str) and self._current_value(page, guard):
@@ -489,6 +539,7 @@ class CampaignBrowserRunner:
         elif action == "click":
             self._click(page, selector, timeout)
             page.wait_for_timeout(int(step.get("settle") or 400))
+            self._raise_site_error(session)
         elif action == "press":
             key = step.get("key") or "Enter"
             if selector:

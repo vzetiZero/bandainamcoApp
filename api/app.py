@@ -508,6 +508,7 @@ def create_app(state: Optional[ApiState] = None) -> FastAPI:
                                         campaign_slot.SLOT_ITEM_DEFAULT,
                                         slot_date=payload.get("slot_date") or "",
                                         slot_times=payload.get("slot_times") or [],
+                                        slot_codes=payload.get("slot_codes") or [],
                                         use_account_address=bool(
                                             payload.get("use_account_address")),
                                         clear_cart=bool(payload.get("clear_cart")),

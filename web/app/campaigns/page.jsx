@@ -44,6 +44,8 @@ export default function CampaignsPage() {
   const [slotTime, setSlotTime] = useState('11:00')
   const [slotTimes, setSlotTimes] = useState(SLOT_TIMES)
   const [slotCode, setSlotCode] = useState('')
+  // Mã 種類 dán tay (mỗi dòng một mã) cho chiến dịch có mã khác dạng chuẩn.
+  const [slotCodesText, setSlotCodesText] = useState('')
   // Mặc định BẬT: chạy là chốt đơn thật. Tắt khi chỉ muốn điền form rồi tự kiểm tra.
   const [submitEnabled, setSubmitEnabled] = useState(true)
   const [useAccountAddress, setUseAccountAddress] = useState(true)
@@ -137,18 +139,31 @@ export default function CampaignsPage() {
       .map((account) => account.email)
   }, [runEmails, visibleAccounts])
 
+  // Mã hàng (種類) lấy từ link chiến dịch: `…/item/ECCL00000062.html` -> ECCL00000062.
+  // Nhờ vậy đổi chiến dịch là đổi mã hàng, không còn dùng cứng 159016.
+  const slotItem = useMemo(() => {
+    const match = String(current?.url || '').match(/\/item\/([^/?#]+?)\.html/)
+    return match ? match[1] : SLOT_ITEM
+  }, [current])
+
   const missingDate = slotMode === 'random' && !slotDate
-  const missingTimes = slotMode === 'random' && slotTimes.length === 0
-  const canRun = Boolean(current) && runTargets.length > 0 && !missingDate && !missingTimes
+  const slotCodes = useMemo(
+    () => slotCodesText.split(/[\s,]+/).map((code) => code.trim()).filter(Boolean),
+    [slotCodesText],
+  )
+  const hasSlotCodes = slotMode === 'random' && slotCodes.length > 0
+  const missingTimes = slotMode === 'random' && !hasSlotCodes && slotTimes.length === 0
+  const missingRandomInput = slotMode === 'random' && !hasSlotCodes && !slotDate
+  const canRun = Boolean(current) && runTargets.length > 0 && !missingTimes && !missingRandomInput
 
   const startRun = async () => {
     if (!current) {
       setMessage('Bấm một dòng trong "Danh sách chiến dịch" để chọn chiến dịch trước')
       return
     }
-    if (missingDate || missingTimes) {
-      setMessage(missingDate
-        ? 'Chế độ ngẫu nhiên: chọn "Ngày nhận hàng" (hoặc đổi sang "Giờ cố định")'
+    if (missingTimes || missingRandomInput) {
+      setMessage(missingRandomInput
+        ? 'Chế độ ngẫu nhiên: chọn "Ngày nhận hàng" hoặc dán danh sách mã 種類 (hoặc đổi sang "Giờ cố định")'
         : 'Chế độ ngẫu nhiên: tick ít nhất một khung giờ')
       return
     }
@@ -164,9 +179,10 @@ export default function CampaignsPage() {
         submit: submitEnabled,
         slot: slotMode === 'fixed' ? slotValue : '',
         slot_random: slotMode === 'random',
-        slot_item: SLOT_ITEM,
+        slot_item: slotItem,
         slot_date: slotDate,
         slot_times: slotMode === 'random' ? slotTimes : [],
+        slot_codes: hasSlotCodes ? slotCodes : [],
         use_account_address: useAccountAddress,
         clear_cart: clearCart,
         use_proxy: useProxy,
@@ -190,8 +206,8 @@ export default function CampaignsPage() {
     if (!slotDate) return ''
     const [, month, day] = slotDate.split('-')
     if (!month || !day) return ''
-    return `${SLOT_ITEM}_${month}${day}_${slotTime.replace(':', '')}_1`
-  }, [slotCode, slotDate, slotTime])
+    return `${slotItem}_${month}${day}_${slotTime.replace(':', '')}_1`
+  }, [slotCode, slotDate, slotTime, slotItem])
 
   return (
     <Box>
@@ -413,12 +429,31 @@ export default function CampaignsPage() {
                       </label>
                     ))}
                   </Box>
+                  <Text sx={{ display: 'block', fontSize: 0, color: 'muted', mt: 2, mb: 1 }}>
+                    Hoặc dán mã 種類 lấy từ trang (mỗi dòng một mã) — dùng khi chiến dịch
+                    có mã khác dạng; dán rồi thì bỏ qua ngày/khung giờ ở trên.
+                  </Text>
+                  <Box
+                    as="textarea"
+                    rows={3}
+                    value={slotCodesText}
+                    onChange={(event) => setSlotCodesText(event.target.value)}
+                    placeholder={'ECCL00000062_1121_1100_1\nECCL00000062_1121_1330_1'}
+                    sx={{
+                      width: '100%', fontFamily: 'mono', fontSize: 1, p: 2,
+                      border: '1px solid', borderColor: 'border', borderRadius: 'small',
+                      bg: 'surface', color: 'text',
+                    }}
+                  />
                 </Box>
               )}
               <Text sx={{ display: 'block', fontSize: 0, color: 'muted', mb: 2 }}>
+                Mã hàng: {slotItem}
                 {slotMode === 'random'
-                  ? `Mỗi tài khoản nhận 1 trong ${slotTimes.length} khung giờ, chia đều ngẫu nhiên`
-                  : `Mã slot: ${slotValue || `mặc định trong recipe (${SLOT_RECIPE_DEFAULT})`}`}
+                  ? (hasSlotCodes
+                    ? ` · chia ngẫu nhiên ${slotCodes.length} mã 種類 đã dán`
+                    : ` · mỗi tài khoản nhận 1 trong ${slotTimes.length} khung giờ, chia đều ngẫu nhiên`)
+                  : ` · mã slot: ${slotValue || `mặc định trong recipe (${SLOT_RECIPE_DEFAULT})`}`}
               </Text>
               {slotMode === 'fixed' && (
                 <TextField
@@ -502,9 +537,9 @@ export default function CampaignsPage() {
                   <Text sx={{ fontSize: 1, color: 'muted' }}>Nhóm này chưa có tài khoản.</Text>
                 )}
               </Box>
-              {missingDate && (
+              {missingRandomInput && (
                 <Text sx={{ display: 'block', fontSize: 1, color: 'error', mb: 1 }}>
-                  Chọn "Ngày nhận hàng" ở trên, hoặc đổi chế độ sang "Giờ cố định".
+                  Chọn "Ngày nhận hàng", hoặc dán danh sách mã 種類, hoặc đổi sang "Giờ cố định".
                 </Text>
               )}
               {missingTimes && (
@@ -517,7 +552,9 @@ export default function CampaignsPage() {
                   Sẽ chạy {runTargets.length} tài khoản cho{' '}
                   <strong>{current ? current.name : '— chưa chọn chiến dịch —'}</strong>
                   {slotMode === 'random'
-                    ? ` · ngày ${slotDate || '?'} · giờ ngẫu nhiên trong ${slotTimes.length} khung`
+                    ? (hasSlotCodes
+                      ? ` · ${slotCodes.length} mã 種類 chia ngẫu nhiên`
+                      : ` · ngày ${slotDate || '?'} · giờ ngẫu nhiên trong ${slotTimes.length} khung`)
                     : ` · ${slotValue ? `giờ ${slotValue.split('_').slice(1, 3).join(' ')}` : 'giờ theo recipe'}`}
                   {submitEnabled ? ' · chốt đơn thật' : ' · chỉ điền, không gửi'}
                 </Text>

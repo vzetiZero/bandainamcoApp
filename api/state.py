@@ -493,12 +493,13 @@ class ApiState:
     def start_browser_run(self, campaign, emails, submit=None, slot="", url_override="",
                           use_account_address=False, clear_cart=False, use_proxy=None,
                           slot_random=False, slot_item=campaign_slot.SLOT_ITEM_DEFAULT,
-                          slot_date="", slot_times=None):
+                          slot_date="", slot_times=None, slot_codes=None):
         """`campaign` là dict có name/url (dựng từ UI); emails lấy mật khẩu trong kho.
 
         Slot ngày/giờ nhận: `slot` = mã cố định cho mọi tài khoản; `slot_random=True`
-        thì mỗi tài khoản nhận một khung giờ ngẫu nhiên (chia đều) trong `slot_times`
-        của ngày `slot_date` — xem `app/domain/campaign_slot.py`.
+        thì mỗi tài khoản nhận một khung giờ ngẫu nhiên (chia đều) — ghép từ
+        `slot_item` + `slot_date` + `slot_times`, hoặc dùng thẳng `slot_codes` khi mã
+        của chiến dịch không theo dạng chuẩn. Xem `app/domain/campaign_slot.py`.
         """
         targets = []
         for email in emails:
@@ -513,7 +514,8 @@ class ApiState:
         slots = campaign_slot.plan_slots([email for email, _password in targets],
                                          fixed="" if slot_random else slot,
                                          item=slot_item, date_text=slot_date,
-                                         times=slot_times or ())
+                                         times=slot_times or (),
+                                         codes=slot_codes or ())
         recipe = None
         recipe_cache = {}
 

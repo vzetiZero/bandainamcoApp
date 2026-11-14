@@ -44,28 +44,33 @@ def split_slot_code(code):
     return item, date_text, "%s:%s" % (clock[:2], clock[2:])
 
 
-def plan_slots(emails, fixed="", item=SLOT_ITEM_DEFAULT, date_text="", times=()):
+def plan_slots(emails, fixed="", item=SLOT_ITEM_DEFAULT, date_text="", times=(), codes=()):
     """Ghép giờ nhận cho từng tài khoản: trả {email: mã slot}.
 
     - `fixed` khác rỗng: mọi tài khoản dùng đúng mã đó (người dùng đã chọn tay).
-    - ngược lại, nếu có `date_text` + `times`: mỗi tài khoản một mã ngẫu nhiên, chia
-      đều giữa các khung giờ (xáo trộn rồi lặp vòng) để không dồn hết vào một giờ.
+    - `codes`: danh sách mã 種類 có sẵn (dán từ trang) — dùng khi mã của chiến dịch
+      không theo dạng `<mã_hàng>_<MMDD>_<HHMM>_1`.
+    - ngược lại, nếu có `date_text` + `times`: tự ghép mã từ ngày và khung giờ.
+    - mỗi tài khoản một mã ngẫu nhiên, chia đều (xáo trộn rồi lặp vòng) để không
+      dồn hết vào một khung giờ.
     - không đủ dữ liệu: trả {} để recipe giữ nguyên giá trị mặc định của nó.
     """
     order = [email for email in emails if email]
     if fixed:
         return {email: fixed for email in order}
-    if not order or not date_text:
+    if not order:
         return {}
-    codes = [slot_code(item, date_text, time_text) for time_text in (times or ())]
-    codes = [code for code in codes if code]
-    if not codes:
+    available = [str(code).strip() for code in (codes or ()) if str(code).strip()]
+    if not available and date_text:
+        available = [slot_code(item, date_text, time_text) for time_text in (times or ())]
+        available = [code for code in available if code]
+    if not available:
         return {}
     plan = {}
     pool = []
     for email in order:
         if not pool:
-            pool = list(codes)
+            pool = list(available)
             random.shuffle(pool)
         plan[email] = pool.pop()
     return plan

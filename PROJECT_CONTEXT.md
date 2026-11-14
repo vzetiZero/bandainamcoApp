@@ -137,6 +137,15 @@ Hai chế độ giờ nhận (`app/domain/campaign_slot.py`):
   (`recipe_for(email)` trong `BrowserCampaignService.run`), nên không phải sửa recipe
   dùng chung; kết quả job ghi kèm slot của từng tài khoản.
 
+Mã hàng (種類) lấy từ link chiến dịch (`/item/<MÃ>.html`), không dùng cứng 159016. Với
+chiến dịch có mã khác dạng (`…_<MMDD>_<HHMM>_1`), dán danh sách mã thật vào ô "mã 種類"
+(`slot_codes`) rồi vẫn chia ngẫu nhiên được.
+
+Khi bước `select` không chọn được (mã 種類 không có trong trang), runner dừng ngay và báo
+**danh sách mã trang đang có**; popup lỗi của site (vd
+「景品ミニゲームの商品コードが指定されていません」) sau một cú bấm cũng dừng ngay với câu
+thông báo, kèm ảnh `site-error` — không chờ hết timeout 20s rồi báo lỗi khó hiểu.
+
 ## 5. Trình duyệt (Playwright + chrome-devtools-mcp)
 
 - Mỗi tài khoản: profile riêng `browser_profiles/<slug email>`, `--remote-debugging-port` riêng,
