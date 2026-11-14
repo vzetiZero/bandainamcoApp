@@ -1,5 +1,4 @@
 requests>=2.31
-PySide6>=6.6
 playwright>=1.47
 fastapi>=0.115
 uvicorn[standard]>=0.30

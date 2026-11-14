@@ -1,6 +1,6 @@
-"""Tuỳ chọn người dùng cho chế độ web/API — cùng interface với `SettingsStore` (Qt).
+﻿"""Tuỳ chọn người dùng cho chế độ web/API — cùng interface với `SettingsStore` (Qt).
 
-Bản desktop dùng QSettings/INI; API cần chạy được khi không có PySide6, nên ở đây
+Bản Qt cũ dùng QSettings/INI; API không phụ thuộc Qt nên ở đây
 đọc/ghi một file JSON `web_settings.json` với đúng các method mà services đang
 gọi (`get`, `get_bool`, `get_int`, `set`, `get_json`, `set_json`).
 
@@ -110,3 +110,4 @@ class FileSettingsStore:
     def as_dict(self) -> dict:
         with self._lock:
             return dict(self._data)
+

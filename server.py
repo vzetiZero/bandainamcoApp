@@ -3,8 +3,8 @@
     python server.py                 # http://127.0.0.1:8787
     python server.py --port 9000 --reload
 
-Không cần PySide6: API chỉ dùng `app.domain`, `app.services` và các adapter
-không-Qt (`file_settings`, `checkout_store`, browser/).
+Không phụ thuộc Qt: chỉ dùng `app.domain`, `app.services` và các adapter
+(`file_settings`, `checkout_store`, browser/).
 """
 import argparse
 import os
@@ -68,7 +68,9 @@ def main():
 
     print("API: http://%s:%d  (docs: /docs)" % (args.host, port))
     if args.reload:
-        uvicorn.run("api.app:app", host=args.host, port=port, reload=True)
+        # Factory để uvicorn tự tạo app trong tiến trình con (không tạo ApiState 2 lần).
+        uvicorn.run("api.app:create_app", factory=True, host=args.host, port=port,
+                    reload=True)
     else:
         from api.app import create_app
 
@@ -78,4 +80,6 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
 

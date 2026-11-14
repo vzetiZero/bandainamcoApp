@@ -1,4 +1,4 @@
-"""CLI chạy đăng ký chiến dịch bằng Chrome thật (Playwright + chrome-devtools-mcp).
+﻿"""CLI chạy đăng ký chiến dịch bằng Chrome thật (Playwright + chrome-devtools-mcp).
 
 Ba việc, cùng một file:
 
@@ -25,12 +25,12 @@ import time
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-from app.config import BROWSER_RECIPE_FILE, SETTINGS_FILE
+from app.config import BROWSER_RECIPE_FILE, SETTINGS_FILE, WEB_SETTINGS_FILE
 from app.infrastructure.account_repository import AccountRepository
 from app.infrastructure.browser.browser_session import find_chrome
 from app.infrastructure.browser.campaign_runner import navigate_only
 from app.infrastructure.browser.discovery import discover_page
-from app.infrastructure.settings_store import SettingsStore
+from app.infrastructure.file_settings import FileSettingsStore
 from app.services.browser_campaign_service import BrowserCampaignService
 from app.services.campaign_service import CampaignService
 
@@ -40,7 +40,7 @@ def log(message):
 
 
 def load_campaigns():
-    store = SettingsStore(path=SETTINGS_FILE)
+    store = FileSettingsStore(WEB_SETTINGS_FILE, legacy_ini=SETTINGS_FILE)
     service = CampaignService(store)
     service.load()
     return service, service.campaigns
@@ -232,3 +232,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+

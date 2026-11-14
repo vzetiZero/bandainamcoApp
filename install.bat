@@ -1,101 +1,64 @@
-@echo off
+﻿@echo off
+chcp 65001 >nul
 title NAMCO Account Manager - Cai dat
-color 0A
+cd /d "%~dp0"
 
 echo ==========================================
 echo    NAMCO Account Manager - Cai dat
 echo ==========================================
 echo.
 
-:: Kiem tra Python da cai dat chua
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo [LOI] Chua cai dat Python!
-    echo Vui long cai dat Python tu https://www.python.org/downloads/
-    echo Nho tick vao "Add Python to PATH" khi cai dat.
+    echo [LOI] Chua cai Python. Tai tai https://www.python.org/downloads/
+    echo       Nho tick "Add Python to PATH".
     pause
     exit /b 1
 )
 
-echo [OK] Da tim thay Python:
-python --version
-echo.
+where node >nul 2>&1
+if errorlevel 1 (
+    echo [LOI] Chua cai Node.js. Tai tai https://nodejs.org/ ^(ban LTS^)
+    pause
+    exit /b 1
+)
 
-:: Nang cap pip
-echo [INFO] Dang cap nhat pip...
+echo [INFO] Cap nhat pip...
 python -m pip install --upgrade pip
-echo.
 
-:: Cai dat thu vien
-echo [INFO] Dang cai dat cac thu vien...
-echo.
-
-python -m pip install requests
+echo [INFO] Cai Python packages (requirements.txt)...
+python -m pip install -r requirements.txt
 if errorlevel 1 (
-    echo [LOI] Khong the cai dat requests!
+    echo [LOI] pip install that bai.
     pause
     exit /b 1
 )
 
-python -m pip install PySide6
-if errorlevel 1 (
-    echo [LOI] Khong the cai dat PySide6!
-    pause
-    exit /b 1
+:: Chrome that tren may duoc dung (channel="chrome") - khong can tai Chromium rieng.
+echo [INFO] Cai chrome-devtools-mcp (dung de soi trang)...
+call npm.cmd i -g chrome-devtools-mcp
+
+echo [INFO] Cai thu vien UI (web/)...
+pushd "%~dp0web"
+call npm.cmd install --no-fund --no-audit
+popd
+
+echo [INFO] Cai Electron (desktop/)...
+pushd "%~dp0desktop"
+call npm.cmd install --no-fund --no-audit
+if not exist "node_modules\electron\dist\electron.exe" (
+    echo [INFO] Tai binary Electron (npm co the chan postinstall)...
+    node node_modules\electron\install.js
 )
+popd
 
-:: Playwright chi can cho phan chay chien dich bang trinh duyet.
-:: Chrome that tren may duoc dung (channel="chrome"), KHONG can tai Chromium rieng.
-echo [INFO] Dang cai dat Playwright (tuy chon, cho phan chay bang Chrome)...
-python -m pip install playwright
-if errorlevel 1 (
-    echo [CANH BAO] Khong cai duoc Playwright - phan chay bang Chrome se khong dung duoc.
-)
-
-:: chrome-devtools-mcp: dung de soi trang/ snapshot. Thieu no thi app van chay.
-echo [INFO] Dang cai chrome-devtools-mcp (can Node.js)...
-where node >nul 2>&1
-if errorlevel 1 (
-    echo [CANH BAO] Chua co Node.js - bo qua chrome-devtools-mcp.
-) else (
-    call npm.cmd i -g chrome-devtools-mcp
-)
-
-:: Web UI (Next.js) + API FastAPI
-echo [INFO] Dang cai FastAPI/uvicorn cho API...
-python -m pip install fastapi "uvicorn[standard]"
-
-echo [INFO] Dang cai thu vien cho giao dien web (web/)...
-where node >nul 2>&1
-if errorlevel 1 (
-    echo [CANH BAO] Chua co Node.js - khong cai duoc giao dien web.
-) else (
-    pushd "%~dp0web"
-    call npm.cmd install --no-fund --no-audit
-    popd
-
-    echo [INFO] Dang cai Electron cho ung dung desktop (desktop/)...
-    pushd "%~dp0desktop"
-    call npm.cmd install --no-fund --no-audit
-    if not exist "node_modules\electron\dist\electron.exe" (
-        echo [INFO] Tai binary Electron (npm co the chan postinstall)...
-        node node_modules\electron\install.js
-    )
-    popd
-
-    echo [INFO] Build giao dien tinh (web/out)...
-    pushd "%~dp0web"
-    call npm.cmd run build
-    popd
-)
-
+echo [INFO] Build giao dien tinh (web/out)...
+pushd "%~dp0web"
+call npm.cmd run build
+popd
 
 echo.
 echo ==========================================
-echo    [OK] CAI DAT HOAN TAT!
+echo    [OK] CAI DAT HOAN TAT - chay start.bat
 echo ==========================================
-echo.
-echo Ban co the chay ung dung bang file start.bat
-echo.
 pause
-

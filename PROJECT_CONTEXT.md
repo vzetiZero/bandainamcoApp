@@ -1,1109 +1,133 @@
-﻿# NAMCO Account Manager — Tài liệu dự án cho AI Agent
+﻿# PROJECT_CONTEXT — NAMCO Account Manager
 
-Tài liệu này mô tả **logic đã có**, **trạng thái triển khai** và **kế hoạch** của dự án.
-Đọc file này trước khi sửa bất kỳ dòng code nào.
+Quản lý nhiều tài khoản NAMCO Parks trên Windows: kiểm tra đăng nhập, đọc hồ sơ, đổi tên,
+theo dõi chiến dịch 抽選 và chạy đăng ký bằng Chrome thật (mỗi tài khoản một cửa sổ).
 
----
+## 1. Kiến trúc
 
-## 1. Tổng quan
+```
+Electron window (web/out) ──HTTP/JSON──> api/ (FastAPI) ──> app/services ──> app/domain
+                                            │                    └─> app/infrastructure (adapters)
+                                            └─ JobRegistry (thread nền) + LogBuffer
+```
 
-Ứng dụng desktop Windows (PySide6) để quản lý danh sách tài khoản BANDAI NAMCO ID /
-NAMCO Parks: thêm, kiểm tra đăng nhập, đọc hồ sơ thành viên, đổi tên Kanji.
+| Thư mục / file | Vai trò |
+|---|---|
+| `api/` | `app.py` (route REST + CORS), `state.py` (wiring, LogBuffer, JobRegistry, các job) |
+| `app/domain/` | quy tắc thuần, không I/O: `accounts`, `campaigns`, `checkout`, `browser_recipe`, `ip_rules`, `login_rules`, `names` |
+| `app/services/` | use case: `account_service`, `campaign_service`, `browser_campaign_service` |
+| `app/infrastructure/` | adapter: `bandai_auth` (login + handoff + hồ sơ), `bandai_name`, `bandai_profile`, `account_repository`, `file_settings`, `checkout_store`, `web`, `browser/` |
+| `app/infrastructure/browser/` | `browser_session` (Chrome riêng mỗi tài khoản), `campaign_runner` (replay recipe), `mcp_client` (chrome-devtools-mcp), `discovery` (dò trang) |
+| `web/` | UI Next.js 14 (App Router) + theme-ui; build tĩnh ra `web/out` |
+| `desktop/` | vỏ Electron: nạp `web/out` qua protocol `app://`, truyền `API_BASE` |
+| `recipes/*.json` | công thức thao tác trình duyệt (dữ liệu, không phải code) |
+| `server.py` | chạy API (`--kill-port` mặc định: cổng bận thì kill tiến trình cũ) |
+| `start.py` / `start.bat` | khởi động tất cả: cài thiếu → build UI → giải phóng cổng → API → Electron |
+| `tools/port_tools.py` | kiểm tra/giải phóng cổng TCP (`netstat`+`taskkill`, POSIX `lsof`) |
+| `browser_campaign.py`, `change_name.py` | CLI dò/chạy chiến dịch và đổi tên |
+| `proxy_manager.py` | proxy cho mọi request HTTP (`new_session()`, `proxy.txt`) |
 
-### 1.1 Cấu trúc MVC + DI
+## 2. Đăng nhập & hồ sơ
 
-Project tách theo lớp; **mọi phụ thuộc đi qua `app/container.py`**, UI không tự
-`import` client mạng hay mở file dữ liệu.
+1. **BNID** (`account.bandainamcoid.com`): `v3/login/init` → `v3/login/idpw` (kèm `env_info`)
+   → handoff `btn-next` (**không tạo passkey**) → Parks2 `member_mypage.html`.
+2. **Form Parks2** (`parks2.../login.html?request=redirect_logon`): `#LOGINID` / `#PASSWORD`
+   → `input[type=submit][value="ログイン"]`. Đây là đường **duy nhất** chạy được với tài khoản
+   chỉ có Parks2; BNID trả 「メールアドレス…が間違っている」 cho nhóm này.
+3. Hồ sơ đọc từ `member_mypage.html`: 16 trường (tên kanji/kana, postal_code, prefecture,
+   city, address_number, phone, points…). Lỗi `UnexpectedRemoteAddress` ⇒ IP bị chặn.
+4. Mọi request HTTP đi qua `new_session()` để dùng proxy; proxy bị chặn nghỉ 300s.
 
-| Path | Vai trò | Chứa gì |
+## 3. Chiến dịch
+
+- Mỗi chiến dịch: `name`, `url`, `opens_at`, `closes_at` (`YYYY-MM-DD HH:MM`), `notes`.
+  Trạng thái (`Đang mở` / `Chưa mở` / `Đã đóng` / `Chưa rõ`) **tính từ thời gian**, không nhập tay.
+- Ghi nhận đăng ký theo khoá `"tên|link"` → `{campaign_key: [{email, at}]}`.
+- Trạng thái chạy: `registered`, `already`, `closed`, `paused`, `dry_run`, `unverified`,
+  `login_failed`, `ip_blocked`, `error`, `skipped`; chỉ `registered`/`already` được ghi nhận.
+
+## 4. Recipe (dữ liệu, không phải code)
+
+`recipes/parks2_campaign.json` — 4 khối: `name`, `login`, `entry`, `verification`.
+
+Bước (`entry.steps` / `login.steps`) là object: `action` ∈ `goto, fill, select, check, click,
+press, wait_text, wait_selector, sleep, screenshot, dismiss, pause, submit`, kèm `selector`,
+`value`, và các cờ `when` (chỉ chạy khi biến có giá trị), `only_if_empty` (không ghi đè dữ liệu
+site đã có), `optional`, `requires_submit`.
+
+Biến dùng trong `selector`/`value`: `{email}`, `{password}`, `{l_name}`, `{f_name}`, `{l_kana}`,
+`{f_kana}`, `{zip}`, `{pref}`, `{city}`, `{street}`, `{building}`, `{building_none}`, `{tel}`,
+`{card_holder}`, `{card_number}`, `{card_exp}`, `{card_exp_month}`, `{card_exp_year}`, `{card_cvv}`.
+
+`validate_recipe()` chặn action sai, thiếu trường và placeholder (`TODO`, `<` trong selector).
+Sửa file qua panel Settings → Recipe JSON (API validate trước khi ghi) hoặc bằng tay.
+
+Luồng hiện tại của 熊本店 OP-18: login Parks2 → trang item → `dismiss` popup 本人確認
+(`#confirmCheck` + `#closePopupButton`) → `select #PRIORITY_ITEMPROPERTY_CD_MATRIX_0`
+(`159016_1121_1100_1` = 11/21 11:00) → `#CART_AMOUNT_0` → `#addCart` → 購入手続きに進む →
+`a[onclick*="cart_seisan.html"]` → ご注文情報入力 → điền địa chỉ theo hồ sơ → **`pause`**.
+
+## 5. Trình duyệt (Playwright + chrome-devtools-mcp)
+
+- Mỗi tài khoản: profile riêng `browser_profiles/<slug email>`, `--remote-debugging-port` riêng,
+  proxy riêng. Chrome thật (`channel="chrome"`), cờ chống occlusion để screenshot không trắng.
+- **Mỗi tài khoản chạy trong thread riêng**: Playwright sync gắn với thread tạo nó; tài khoản
+  bị `pause` (giữ cửa sổ) sẽ treo tài khoản sau nếu dùng lại thread.
+- `pause` ⇒ không `close()` phiên, `status=paused`, cửa sổ ở lại cho người dùng làm tiếp;
+  tối đa 3 cửa sổ chờ (`max_paused`).
+- `chrome-devtools-mcp` gắn vào cùng cổng (`--browser-url`) chỉ để **dò trang/snapshot/chẩn đoán**;
+  flow chạy hàng loạt dùng selector CSS ổn định.
+- Ảnh chụp + HTML dò được lưu ở `browser_artifacts/` (git-ignored).
+- Trang Parks2 lặp phần tử desktop/mobile cùng `id` (một bản ẩn) ⇒ engine bấm/điền **phần tử đang hiện**.
+
+## 6. Hồ sơ đặt hàng & thẻ
+
+`checkout_profile.json`, mỗi giá trị mã hoá **DPAPI** (Windows), `icacls` hạn chế quyền.
+UI/API chỉ thấy `**** **** **** 1234`; `PUT` với ô thẻ trống = giữ giá trị cũ.
+Trường: người nhận, địa chỉ (`zip/pref/city/street/building` + `building_none`), `tel`, thẻ.
+Khi chạy nhiều tài khoản: `use_account_address` lấy địa chỉ từ hồ sơ Parks2 của từng tài khoản.
+
+## 7. API
+
+`GET /api/health`, `/api/accounts`, `/api/campaigns`, `/api/settings`, `/api/proxy`,
+`/api/checkout`, `/api/logs?after=<seq>`, `/api/jobs[/{id}]`, `/api/browser/sessions`.
+Tác vụ dài (`/api/accounts/check`, `/api/browser/run`, `/api/proxy/check`,
+`/api/browser/discover`) trả `{id, status:"running", ...}`; UI poll job tới khi xong.
+API **không** trả mật khẩu, số thẻ hay CVV. CORS cho `http://localhost:3000` và `app://local`.
+
+## 8. Dữ liệu & cấu hình
+
+| File | Nội dung | Git |
 |---|---|---|
-| `account_manager.py` (24 dòng) | Điểm khởi chạy | `QApplication` + `AccountManager()`. Không còn logic. |
-| `app/config.py` | Hằng số duy nhất | URL, `CLIENT_ID`, `USER_AGENT`, `ENV_INFO`, `ACCOUNT_COOKIE_DOMAIN`, `DATA_FILE`, `ICONS_DIR` |
-| `app/domain/` | **Model** — quy tắc thuần, không import PySide6/requests | `accounts.py` (dòng nhập liệu, trạng thái, lọc, đếm), `names.py` (`NameForm`, `kanji_overrides`), `campaigns.py` (trạng thái theo ngày), `login_rules.py` (`describe_login_error`), `ip_rules.py` (nhận diện lỗi chặn IP) |
-| `app/infrastructure/` | **Adapter** — chạm mạng/dĩa/QSettings | `bandai_auth.py` (login + handoff + hồ sơ), `bandai_profile.py`, `bandai_name.py` (form đổi tên), `account_repository.py` (`accounts_data.json`), `settings_store.py` (QSettings/INI), `web.py` (header + cookie), `browser/` (xem mục 3.1) |
-| `app/services/` | **Use case** — nghiệp vụ trên model + repo | `account_service.py` (add/delete/status/profile/export), `campaign_service.py` (CRUD + đăng ký), `browser_campaign_service.py` (chạy chiến dịch bằng Chrome) |
-| `app/ui/` | **View/Controller** | `main_window.py` (view + handler), `dialogs.py`, `workers.py` (`QThread`), `delegates.py` (badge), `table_spec.py` (cột), `styles.py` (QSS) |
-| `app/container.py` | **Composition root** | `build_container(...)` trả `Container(settings, auth_client, name_client, account_repository, account_service, campaign_service, browser_service)` |
-| `proxy_manager.py` | Proxy cho mọi HTTP request | `new_session()`, đọc `proxy.txt` |
-| `change_name.py` | CLI đổi tên | chỉ tham số dòng lệnh + gọi `BandaiNameClient.change_profile()` |
-| `browser_campaign.py` | CLI chạy/dò chiến dịch bằng Chrome | `--discover`, `--check`, `--run`, `--all`; không chứa logic, chỉ tham số + in kết quả |
-| `recipes/*.json` | Recipe thao tác trình duyệt | Dữ liệu, không phải code — sửa khi site đổi layout |
-| `icon_helper.py` | Nạp SVG icon | cache theo tên icon |
-| `accounts_data.json` | Dữ liệu tài khoản + hồ sơ | **Git-ignored, chứa mật khẩu.** |
-| `proxy.txt` | Danh sách proxy | **Git-ignored, chứa user/pass.** |
-
-**Chiều phụ thuộc:** `ui → services → domain` và `ui → infrastructure` (qua container);
-`domain` không biết `infrastructure`; `infrastructure` không biết `ui`. Muốn test mà
-không cần mạng: `build_container(session_factory=lambda: FakeSession(), settings=store,
-data_file=temp)` rồi truyền chai đó vào `AccountManager(container=...)`.
-
-### Hằng số mạng
-
-Toàn bộ nằm trong `app/config.py` — **đừng** khai báo lại ở nơi khác:
-
-```python
-API_URL       = "https://account-api.bandainamcoid.com/"
-LOGIN_URL     = "https://account.bandainamcoid.com/login.html"
-CLIENT_ID     = "namcoparks_onlinestore"          # OAuth client đã đăng ký — KHÔNG ĐỔI
-REDIRECT_URI  = "https://parks2.bandainamco-am.co.jp/member_regist_new.html?backto=top"
-USER_AGENT    = "Mozilla/5.0 ... Chrome/120.0.0.0 Safari/537.36"
-```
-
-> `CLIENT_ID` là client OAuth đã đăng ký của app NAMCO Parks, khớp `REDIRECT_URI`.
-> **Không bao giờ random hóa** — server sẽ từ chối (`invalid_client`) và mọi tài khoản
-> thật đều dùng chung giá trị này. Không phải fingerprint thiết bị.
-
----
-
-## 2. Cấu trúc UI — toolbar + 3 tab
-
-`AccountManager.setup_ui()` (app/ui/main_window.py) dựng `QToolBar` rồi `QTabWidget` theo thứ tự:
-
-| # | Tab | Hàm dựng | Nội dung |
-|---|---|---|---|
-| 1 | Danh sách tài khoản | `create_right_panel()` | Bảng 21 cột + progress + nhật ký bên phải |
-| 2 | Chiến dịch | `create_campaign_tab()` | Bảng CRUD chiến dịch |
-| 3 | Cấu hình | `create_settings_tab()` | Bật/tắt proxy, file, chế độ, kiểm tra proxy |
-
-### 2.0 Toolbar — nút hành động
-
-3 nút hành động cùng cấp trên toolbar, style qua `objectName` trong `apply_styles()`:
-
-| objectName | Nhãn | Handler |
-|---|---|---|
-| `toolInput` | Nhập tài khoản | `open_input_dialog()` — mở `self.input_dialog` |
-| `toolCheckAll` | Kiểm tra tất cả tài khoản | `check_all_accounts` |
-| `toolDelete` | Xóa đã chọn | `delete_selected` |
-
-Import TXT **không còn là nút toolbar** — nó nằm trong panel nhập (xem 2.1).
-
-### 2.1 Dialog Nhập tài khoản
-
-Panel nhập (`create_left_panel()`) không còn là tab — nó nằm trong `self.input_dialog`
-(`QDialog` không modal, giữ nguyên widget giữa các lần mở). Ô nhập `email|password`,
-5 nút compact trên một hàng, tất cả dùng `objectName` để style trong `apply_styles()`:
-
-| objectName | Nhãn | Icon | Handler | Tooltip |
-|---|---|---|---|---|
-| `actionImport` | Import TXT | `folder-open` | `load_txt_into_input` | Chọn file TXT và đổ nội dung vào ô nhập để xem trước |
-| `actionAdd` | Thêm | `plus` | `add_from_text` | Thêm các tài khoản trong ô nhập vào danh sách |
-| `actionClear` | Xóa | `x` | `text_input.clear` | Xóa toàn bộ nội dung ô nhập |
-| `actionCheck` | Kiểm tra đầu tiên | `check` | `check_first_account` | Kiểm tra tài khoản đầu tiên trong danh sách |
-| `actionExport` | Export | `download` | `export_accounts` | Export danh sách tài khoản ra file |
-
-`load_txt_into_input()` **nối** nội dung file vào ô nhập (giống kéo thả) rồi để người dùng
-bấm **Thêm**; nhờ vậy `update_input_preview()` đếm trước "Sẽ thêm / Trùng / Sai định dạng".
-Ctrl+I (`open_import_dialog`) mở panel nhập trước rồi mới mở hộp chọn file.
-
-**Quy ước bắt buộc:** muốn thêm nút mới thì đặt `objectName` và khai báo
-màu trong bảng QSS của `app/ui/styles.py::build_stylesheet()`. `apply_styles()` chỉ còn
-hai việc: xoá stylesheet của từng widget con rồi `setStyleSheet(build_stylesheet(**read_appearance(self.ui_settings)))`.
-**Không** dùng `setStyleSheet()` trực tiếp trên widget —`apply_styles()` xoá sạch stylesheet
-của mọi widget con mỗi lần đổi giao diện.
-
-`progress_bar` nằm ở tab danh sách (trên bảng); `log_text` được tạo trong `setup_ui()`
-và đặt ở khung nhật ký bên phải bảng.
-
-### 2.2 Tab 1 — Danh sách tài khoản
-
-- Dashboard 4 thẻ thống kê trên bảng: Tổng / Hoạt động / Không hoạt động / Chưa kiểm tra.
-  `update_dashboard()` được gọi cuối `update_table()` nên số liệu luôn khớp bảng.
-  objectName: `statCard`, `statValueTotal`, `statValueActive`, `statValueInactive`,
-  `statValueUnchecked`, `statCaption` — màu khai báo trong `apply_styles()`.
-- Bảng **không còn cột `#`**: số thứ tự do vertical header đảm nhiệm. Cột 0 là Email,
-  cột 1 Password, cột 2 Status — `apply_filter()` đọc đúng các index này.
-- Cột `Password` luôn hiển thị `********`.
-- Danh sách cột là hằng số module `ACCOUNT_COLUMNS`. Nút **Cột hiển thị** (`column_button`)
-  mở menu checkable; cột ẩn lưu QSettings key `hidden_account_columns` (JSON) qua
-  `set_column_hidden()`. Email luôn hiển thị, không nằm trong menu.
-- Sắp xếp: `on_header_clicked()` **sắp lại tại chỗ danh sách của `AccountService`**
-  (property `self.accounts` trỏ đúng list đó) rồi `update_table()` + `save_data()` — index
-  bảng luôn khớp list. Không dùng `setSortingEnabled()` vì sẽ phá invariant index
-  (context menu, xóa, double-click đều đọc `self.accounts[row]`).
-- Cột Status vẽ badge bo tròn bởi `StatusDelegate` (màu từ `STATUS_BADGE_COLORS`, nền tint
-  alpha 40 nên đúng cả theme sáng/tối); giá trị lạ fallback về vẽ mặc định.
-- **Tiến trình theo từng tài khoản**: cột Email (index 0) có `EmailProgressDelegate`.
-  `set_row_progress(email, percent)` ghi percent vào `self.row_progress` rồi đặt
-  `PROGRESS_ROLE` (khai báo ở `table_spec.py`) lên item Email và vẽ lại đúng ô đó bằng
-  `viewport().update(visualRect(index))` — không gọi `update_table()` (sẽ mất fill).
-  Delegate vẽ nền màu accent alpha 90 chiếm `percent` chiều rộng ô, text email elided bên
-  trái và `NN%` góc phải; `percent = 0` → trả về vẽ mặc định. Vì vậy khi kiểm tra song song
-  nhiều tài khoản, mỗi dòng tự cho biết tài khoản đó đang tới đâu.
-  `on_check_result`/`on_single_result` xoá fill (`set_row_progress(email, 0)`) trước khi ghi kết quả.
-- `refresh_account_row(email)` chỉ dựng lại một dòng (theo `account_row()`), dùng cho kết quả
-  kiểm tra/đổi tên đơn lẻ; `update_dashboard()` + `apply_filter()` vẫn chạy sau đó.
-  Chỉ `setItem()` khi ô chưa có item: Qt 6 cảnh báo
-  "cannot insert an item that is already owned by another QTableWidget" và **bỏ qua** lần
-  insert đó kể cả khi item thuộc cùng bảng, nên code cũ `item or QTableWidgetItem()` rồi
-  `setItem()` lại sinh 21 dòng log mỗi lần refresh một dòng. Sửa: lấy item sẵn có →
-  `setText()` trực tiếp, chỉ tạo + insert khi `item is None`.
-- Trạng thái rỗng: `empty_label` phủ giữa bảng khi chưa có tài khoản hoặc không dòng nào
-  khớp bộ lọc; geometry đồng bộ qua `eventFilter` bắt Resize của viewport.
-- Phím tắt: Ctrl+N mở dialog nhập, Ctrl+I mở dialog nhập rồi chọn file TXT, Ctrl+F focus ô
-  tìm kiếm, Del xóa dòng chọn (context `WidgetShortcut` gắn trên bảng để không bắt phím khi gõ ô khác).
-- Toolbar: `stats_chip` rich-text "x hoạt động · y lỗi · z chưa kiểm tra" cạnh nhãn tổng số.
-- Bảng nhật ký (`self.log_panel`, QFrame bên phải bảng) **mặc định đóng** để bảng tài khoản
-  rộng tối đa; nút **Nhật ký** trên toolbar (checkable, `log_btn`) gọi
-  `set_log_panel_visible()` để mở/đóng, nhãn đổi thành "Ẩn nhật ký" khi đang mở. Log vẫn được
-  ghi vào `log_text` khi panel đóng nên mở lại là thấy đủ. Trong panel có nút **Xóa log**
-  (`clear_log()`), chỉ xóa nội dung hiển thị, không đụng dữ liệu.
-- Dialog nhập: kéo thả file `.txt` vào ô nhập (eventFilter DragEnter/Drop, chỉ nhận `.txt`),
-  `update_input_preview()` đếm sẵn "Sẽ thêm / Trùng / Sai định dạng" theo `textChanged`.
-- Cột `Status` tô màu: `Hoạt động` → `#28a745`, `Không hoạt động` → `#dc3545`,
-  `Chưa kiểm tra` → `#8a94a6`. Phải so sánh **chuỗi có dấu chính xác**
-  (lỗi cũ từng so `"Hoat"` với `"Hoạt động"` nên không bao giờ tô màu).
-- Lọc: `apply_filter()` theo status + tìm kiếm email (dùng `setRowHidden`).
-- Context menu chuột phải: `context_rows()` quyết định menu tác động lên đâu — bấm vào
-  **trong vùng đang chọn** thì giữ nguyên cả vùng (Kiểm tra / Copy / Xóa chạy cho **tất cả**
-  tài khoản đã chọn, nhãn menu ghi rõ số dòng), bấm ra ngoài vùng thì chỉ dòng vừa bấm.
-  "Đổi tên" và "Xem thông tin" về bản chất chỉ làm được với 1 tài khoản (một worker, một hộp
-  thoại) nên nhãn của chúng ghi kèm email mục tiêu để không nhầm là đã áp dụng cho cả vùng.
-- Xóa (menu chuột phải, nút toolbar và Del) luôn qua `confirm_and_delete()`: hộp thoại xác nhận
-  liệt kê tối đa 10 email ("… và N tài khoản nữa"), bấm No không xóa gì, bấm Yes xóa trọn
-  vùng và ghi xuống file.
-
-### 2.3 Tab 3 — Chiến dịch (chi tiết ở mục 3)
-
-Bố cục gọn: **một hàng lọc** (lọc + tìm + tổng số) → **một hàng nút** (Thêm/Sửa/Mở trang/
-Xóa/Export) → bảng → 2 nhóm thao tác **Đăng ký thủ công** và **Chạy tự động bằng Chrome**
-(mỗi nhóm 2 hàng: điều khiển + nút, kèm 1 nhãn trạng thái). Không còn đoạn ghi chú dài
-trong thân tab: nội dung giải thích nằm ở `setToolTip` của tab/nhóm/nút.
-
-### 2.4 Tab 4 — Cấu hình (chi tiết ở mục 4)
-
-Ba nhóm, mỗi nhóm 1–2 hàng:
-
-| Nhóm | Nội dung |
-|---|---|
-| **Trình duyệt tự động** | `Recipe:` (đường dẫn + Chọn file + Kiểm tra) · hàng 2: `Chrome ẩn (headless)` + `Luồng kiểm tra` (`max_workers_input`, 1..`MAX_CONCURRENCY`) + nhãn `Recipe OK/lỗi` |
-| **Thông tin đặt hàng & thanh toán** | `Nhập / sửa thông tin...` + `Xoá` + nhãn ngắn (`**** 4242 · 熊本県… · đã mã hoá`); chi tiết địa chỉ/trường thiếu nằm ở tooltip |
-| **Proxy** | `Bật proxy` + `Chế độ` · `File:` + Chọn/Tải lại · 4 nút (Kiểm tra/Mở file/DS tạm nghỉ/Bỏ tạm nghỉ) + nhãn trạng thái · bảng proxy |
-
-`on_concurrency_changed()` gán ngay `self.max_workers` và ghi QSettings `max_workers`, nên
-lần chạy batch kế tiếp dùng đúng số luồng vừa chọn. Mặc định `DEFAULT_CONCURRENCY = 5`.
-(Tab không còn tiêu đề lớn “Cấu hình” vì tên tab đã đủ; nhóm **Kiểm tra đồng thời** cũ đã
-gộp vào **Trình duyệt tự động**.)
-
-
----
-
-## 3. Logic tab Chiến dịch
-
-**Mục đích:** lưu danh sách link chiến dịch (link đăng ký 抽選 thời gian giới hạn) để
-nhìn nhanh chiến dịch nào đang hiệu lực
-
-**Mô hình dữ liệu: mỗi chiến dịch là một dòng riêng.** Không cần cập nhật liên tục.
-Thêm một dòng khi có chiến dịch mới, giữ dòng cũ để tra cứu, chỉ sửa khi link hoặc ngày
-của chính chiến dịch đó thay đổi. Trạng thái được **tính từ ngày**, không phải nhập tay.
-
-### Cấu trúc dữ liệu — 5 trường lưu trữ
-
-| Key | Cột hiển thị | Quy tắc |
-|---|---|---|
-| `name` | Tên | Bắt buộc, không rỗng |
-| `url` | Link | Bắt buộc, scheme phải là `http` hoặc `https` |
-| `opens_at` | Mở đăng ký | `YYYY-MM-DD HH:MM`, để trống nếu chưa công bố |
-| `closes_at` | Đóng đăng ký | `YYYY-MM-DD HH:MM`, để trống nếu chưa công bố |
-| `notes` | Ghi chú | Tự do, `QTextEdit` giới hạn 120px |
-
-Hai cột **Trạng thái** và **Còn lại** không lưu — chúng tính lại mỗi lần vẽ bảng.
-
-### Hằng số module-level (logic thuần, không đụng UI) — `app/domain/campaigns.py`
-
-```python
-CAMPAIGN_STATUS_OPEN          = "Đang mở"
-CAMPAIGN_STATUS_NOT_STARTED   = "Chưa mở"
-CAMPAIGN_STATUS_CLOSED        = "Đã đóng"
-CAMPAIGN_STATUS_UNDETERMINED  = "Chưa rõ"
-CAMPAIGN_SOON_WINDOW          = timedelta(hours=24)
-CAMPAIGN_STATUS_COLORS        = {...}
-
-parse_campaign_time(text)                 # -> datetime | None
-campaign_status(campaign, now=None)       # -> 1 trong 4 trạng thái
-format_campaign_remaining(campaign, now)  # -> "còn 3h" / "quá hạn 4d"
-```
-
-`parse_campaign_time` nhận `%Y-%m-%d %H:%M`, `%Y-%m-%d %H:%M:%S`, `%Y-%m-%d`; trả
-`None` cho chuỗi rác hoặc rỗng. `campaign_status` xử lý đúng 4 ca: không có ngày nào →
-Chưa rõ; quá `closes_at` → Đã đóng; chưa tới `opens_at` → Chưa mở; còn lại → Đang mở.
-
-### Bảng — 8 cột
-
-`Tên | Link | Mở đăng ký | Đóng đăng ký | Trạng thái | Còn lại | Đã đăng ký | Ghi chú`
-
-Cột **Trạng thái** tô màu theo `CAMPAIGN_STATUS_COLORS`. Cột **Còn lại** đếm ngược tới
-mốc kế tiếp (`opens_at` nếu chưa tới giờ, ngược lại `closes_at`). Cột **Đã đăng ký** hiện
-số tài khoản đã ghi nhận cho chiến dịch đó, tô xanh dương; rỗng thì hiện `—`.
-
-### Vòng đời
-
-```
-add_campaign()    → CampaignDialog → validate_and_accept() → campaign_service.add() → refresh
-edit_campaign()   → selected_campaign_row() → CampaignDialog(campaign) → campaign_service.update(row, …)
-delete_campaign() → selected_campaign_row() → QMessageBox hỏi → campaign_service.remove(row)
-open_campaign()   → selected_campaign_row() → webbrowser.open(url)
-export_campaigns()→ QFileDialog → ghi file "|" ngăn cách
-```
-
-`CampaignDialog.validate_and_accept()` chặn **trước khi** dữ liệu vào bộ nhớ: sai
-định dạng ngày thì báo, và `closes_at <= opens_at` thì báo. Bỏ trống cả hai ngày thì hợp lệ
-(trạng thái Chưa rõ).
-
-### Chia trách nhiệm — view vs `CampaignService`
-
-| Thuộc tính / hàm | Việc làm |
-|---|---|
-| `campaign_service.add/update/remove/save` | Sửa list chiến dịch rồi ghi QSettings (qua `SettingsStore`), tự `prune_orphan_signups()` khi save |
-| `campaign_service.mark/unmark/signups_for/is_registered` | Ghi nhận tài khoản đã đăng ký theo khoá chiến dịch |
-| `campaign_service.key/is_valid` (staticmethod) | Khoá `"tên\|link"` và chuẩn kiểm tên + scheme http(s) |
-| `create_campaign_tab()` | Dựng hàng lọc + hàng nút + bảng 8 cột + `campaign_timer` |
-| `refresh_campaign_table()` | Vẽ lại bảng từ `self.campaigns`, tạo `self.campaign_states` (row → trạng thái) |
-| `update_campaign_summary()` | Dòng tổng kết + **cảnh báo sắp mở trong 24h, mỗi chiến dịch đúng 1 lần** |
-| `apply_campaign_filter()` | `setRowHidden` theo combo lọc + ô tìm kiếm tên/link |
-| `export_campaigns()` | Ghi file txt phân cách bằng `\|`, có dòng header |
-| `selected_campaign_row()` | Index dòng đang chọn, hoặc `None` + hộp thoại nhắc |
-
-### Lọc và tìm kiếm
-
-| Giá trị combo | Ý nghĩa |
-|---|---|
-| `all` | Tất cả |
-| `Đang mở` | Chỉ trạng thái Đang mở |
-| `soon` | Chưa mở **và** cách `opens_at` ≤ 24h |
-| `Chưa mở` / `Đã đóng` / `Chưa rõ` | Lọc theo trạng thái |
-
-`apply_campaign_filter` dùng `setRowHidden` nên chỉ ẩn dòng, **không** xoá khỏi
-`self.campaigns` — index bảng luôn khớp index list.
-
-### Làm mới theo thời gian
-
-`QTimer` 60 giây gọi `refresh_campaign_table()`. Nhờ vậy sang nửa đêm hoặc tới giờ mở
-thì trạng thái tự đổi, không cần bấm tay. `campaign_states` giữ trạng thái của lần vẽ
-trước để cảnh báo chỉ bắn một lần cho mỗi chiến dịch.
-
-### Lưu trữ và tương thích dữ liệu cũ
-
-- Biến trong RAM: `CampaignService.campaigns` (list[dict]); view đọc qua property
-  `self.campaigns` / `self.campaign_signups` — **không có setter**, muốn sửa phải đi qua service.
-- Lưu: `QSettings("NAMCO", "AccountManager")` key `campaigns`, **chuỗi JSON**
-  (`ensure_ascii=False`), ghi bởi `SettingsStore.set_json`.
-- Nạp trong `load_data()` → `campaign_service.load()`, chống lỗi JSON hỏng (reset `[]`).
-- Dữ liệu cũ ghi ngày dạng text tự do vẫn đọc được: `parse_campaign_time` trả `None`
-  → hiển thị "Chưa rõ". Sửa lại qua nút **Sửa** là chuyển sang trạng thái thật.
-
-### Giới hạn còn lại
-
-- Không có sắp xếp cột, không chọn nhiều dòng để xoá.
-- Không có import từ file (chỉ export).
-- Cảnh báo hiện status bar + nhật ký, không có popup.
-
-### Đăng ký thủ công theo chiến dịch (Phần 2 & 3)
-
-Group box **Đăng ký thủ công theo chiến dịch** nằm dưới bảng. Ràng buộc quan trọng:
-app **không** điền form và **không** submit — đăng ký là thao tác thủ công của người
-dùng trên trang 抽選. App chỉ mở link và chép sẵn thông tin để giảm việc gõ.
-
-| Thành phần | Trách nhiệm |
-|---|---|
-| `signup_campaign_label` | Tên + trạng thái chiến dịch đang chọn, cập nhật theo `itemSelectionChanged` |
-| `signup_account_combo` | Danh sách email lấy từ `self.accounts`, chỉ dựng lại khi danh sách thay đổi |
-| `signup_copy_password` | Mặc định **tắt** → chép email. Bật → chép `email\npassword` (dán vào 2 ô) |
-| `signup_summary_label` | Số tài khoản đã đăng ký của chiến dịch đang chọn |
-
-| Hàm | Việc làm |
-|---|---|
-| `open_campaign_with_account()` | `webbrowser.open(url)` + `setText` clipboard, báo status bar và nhật ký |
-| `mark_account_registered()` | Thêm `{email, at}` vào danh sách của chiến dịch, bỏ qua nếu đã có |
-| `unmark_account_registered()` | Bỏ email khỏi danh sách của chiến dịch |
-| `show_campaign_signups()` | Hộp thoại liệt kê email + thời điểm, sắp theo thời gian |
-
-### Lưu ghi nhận đăng ký
-
-```python
-CampaignService.key(campaign)  # -> "tên|link", ổn định qua đổi thứ tự dòng
-campaign_service.signups       # {campaign_key: [{"email": ..., "at": "YYYY-MM-DD HH:MM:SS"}]}
-QSettings key: "campaign_signups"   # chuỗi JSON
-```
-
-- `campaign_service.load()` đọc cả hai key trong `load_data()`, chống lỗi JSON hỏng → `[]`/`{}`.
-- `save_signups()` ghi rồi refresh bảng.
-- `prune_orphan_signups()` chạy trong `campaign_service.save()`: xoá ghi nhận của chiến dịch
-  đã bị xoá để dữ liệu không phình vô hạn.
-- `refresh_signup_accounts()` được gọi từ `update_table()` nên combo tài khoản luôn khớp
-  danh sách; có so chữ ký `signup_account_emails` để không dựng lại combo vô ích.
-
----
-
-## 3.1 Chạy chiến dịch bằng trình duyệt (Playwright CDP + chrome-devtools-mcp)
-
-Thay thế dần cách thủ công ở mục 3 khi cần: mỗi tài khoản được mở trong **một cửa sổ
-Chrome riêng** (profile riêng, proxy riêng, cổng debug riêng), app đọc **recipe JSON**
-để biết bấm/điền vào đâu, rồi tự bấm gửi nếu bật `Tự bấm gửi`.
-
-### Vì sao chia hai lớp: Playwright chạy, MCP dò
-
-| Lớp | Vai trò | Lý do |
-|---|---|---|
-| Playwright (`chromium.launch_persistent_context` + `connect` qua CDP) | chạy flow lặp lại cho từng tài khoản | selector CSS ổn định, chạy được hàng trăm tài khoản, điều khiển được proxy có user/pass |
-| `chrome-devtools-mcp` (Node, gắn qua `--browser-url`) | dò trang, snapshot a11y, ảnh, đọc console/network | tool của MCP dựa trên **uid của snapshot**, uid đổi sau mỗi lần chụp ⇒ không dùng để replay cứng, nhưng rất tốt để *tìm* selector và chẩn đoán khi trang đổi |
-
-### Thành phần
-
-| File | Trách nhiệm |
-|---|---|
-| `app/domain/browser_recipe.py` | quy tắc thuần: `load_recipe`, `validate_recipe` (bắt action sai + placeholder `TODO`), `render_value` (`{email}`/`{password}`), `classify_outcome` (success/already/closed/error) |
-| `app/infrastructure/browser/browser_session.py` | `BrowserSession`: mở Chrome thật (`channel="chrome"` hoặc `executable_path`), `--user-data-dir=browser_profiles/<email>`, `--remote-debugging-port` (cấp phát từ `BROWSER_CDP_BASE_PORT`), proxy của `ProxyManager.next_proxy_entry()`, `goto/page_text/screenshot` |
-| `app/infrastructure/browser/campaign_runner.py` | `CampaignBrowserRunner.run()`: login (nếu recipe có) → mở link chiến dịch → chạy bước `entry` → bấm gửi (chỉ khi `submit`) → phân loại + chụp ảnh; trả `BrowserRunResult` |
-| `app/infrastructure/browser/mcp_client.py` | `DevtoolsMcpClient`: JSON-RPC stdio tới `chrome-devtools-mcp` (`initialize` → `tools/call`), tool `list_pages`, `take_snapshot`, `take_screenshot`, `evaluate_script`, `list_console_messages` |
-| `app/infrastructure/browser/discovery.py` | `discover_page()`: HTML + text + ảnh + `elements.json` (selector gợi ý) + `a11y_snapshot.txt` vào `browser_artifacts/` |
-| `app/services/browser_campaign_service.py` | `preflight()` (thiếu Chrome/recipe nháp thì chặn trước khi mở Chrome), `run()` chạy `parallel` Chrome, ghi nhận qua `CampaignService.mark()` khi trang xác nhận thành công |
-| `app/ui/workers.py::BrowserCampaignWorker` | đổi callback thành signal: `message`, `account_progress`, `result_ready`, `progress`, `finished_run` |
-| `app/ui/workers.py::DiscoveryWorker` | chạy `discover_page()` ngoài UI thread |
-
-### Recipe — 5 khối, dữ liệu thuần
-
-```json
-{
-  "name": "...",
-  "login":  { "url": "...", "logged_in_selector": "#menu",
-              "steps": [ { "action": "fill", "selector": "#login_id", "value": "{email}" } ] },
-  "entry":  { "steps": [ { "action": "click", "selector": "#agree" },
-                         { "action": "submit", "selector": "#send", "requires_submit": true } ] },
-  "verification": { "success_text": [], "already_text": [], "closed_text": [], "error_text": [] }
-}
-```
-
-Action hợp lệ: `goto`, `fill`, `select`, `check`, `click`, `press`, `wait_text`,
-`wait_selector`, `sleep`, `screenshot`, `dismiss`, `pause`, `submit`. Mọi bước nhận
-`optional: true` (bỏ qua khi phần tử không có) và `requires_submit: true` (chỉ chạy khi
-bật submit).
-
-- `dismiss` = đóng popup: `selectors` (thử từng cái, cái nào đang hiện thì bấm, không
-  chờ timeout) + `check` (tick checkbox trước khi bấm). Checkbox Parks2 bị ẩn trong
-  `<label class="check-area">` nên `_tick()` phải thử `check()` → bấm `ancestor::label`
-  → cuối cùng set `checked` bằng JS và phát event `change`.
-- `pause` = điểm dừng an toàn: runner dừng, **không close()** phiên, trả
-  `status="paused"`, `keep_open=True`; `BrowserCampaignService._keep_open()` giữ phiên
-  trong `open_sessions` để cửa sổ Chrome còn nguyên cho người dùng làm tiếp.
-
-### Vòng đời một lượt chạy
-
-```
-UI/CLI: service.preflight() (thiếu Chrome/recipe ⇒ dừng, không mở Chrome)
-   → service.run(campaign, [(email, password)], submit=…, recipe=…)
-   mỗi tài khoản (thread riêng): BrowserSession(profile riêng, proxy riêng, port riêng)
-     → login (nếu recipe có và chưa đăng nhập)
-     → goto link chiến dịch → chạy bước entry (dismiss/select/click/…)
-     → `pause`  ⇒ giữ cửa sổ, status="paused", KHÔNG close
-     → hoặc `submit` ⇒ classify_outcome() → screenshot → CampaignService.mark()
-```
-
-### Quy ước bắt buộc của phần này
-
-1. **Proxy đi qua `ProxyManager.next_proxy_entry()`**, không đọc `proxy.txt` trực tiếp;
-   gặp dấu hiệu chặn IP thì `mark_entry_blocked()` để proxy nghỉ như luồng requests.
-2. **Một tài khoản = một profile Chrome** (`browser_profiles/<slug email>`). Không dùng
-   chung profile: cookie/phiên sẽ lẫn và Chrome chỉ cho một tiến trình giữ mỗi profile.
-3. **Mỗi tài khoản phải chạy trong thread riêng** (service tự tạo `threading.Thread`
-   + semaphore, không dùng lại thread của `ThreadPoolExecutor`). Playwright sync API
-   gắn chặt với thread đã tạo nó: tài khoản trước bị `pause` (giữ cửa sổ) mà tài khoản
-   sau chạy cùng thread thì Playwright thứ hai treo vô hạn.
-4. **Cờ chống Chrome "occluded"**: `--disable-features=CalculateNativeWinOcclusion,…`
-   + `--disable-backgrounding-occluded-windows` + `--disable-renderer-backgrounding`.
-   Thiếu chúng, cửa sổ bị cửa sổ khác che thì Chrome ngừng vẽ và `screenshot()` trả
-   ảnh trắng 100% (chỉ vài trăm byte).
-5. **Selector nằm trong recipe**, không hard-code trong Python. Trang đổi thì chạy
-   `--discover` rồi sửa JSON. Trang Parks2 lặp phần tử cho desktop và thanh dính đáy
-   (cùng `#addCart`) ⇒ runner bấm **phần tử đang hiện đầu tiên** (`_click`).
-6. **Mặc định không submit**: recipe thật hiện dừng ở `pause` (trước khi chốt đơn).
-7. `browser_profiles/` và `browser_artifacts/` chứa cookie và dữ liệu trang thật ⇒
-   **git-ignored**, không commit.
-8. Playwright là phụ thuộc mới (`requirements.txt`) và `chrome-devtools-mcp` cài bằng
-   `npm i -g chrome-devtools-mcp`; app vẫn chạy bình thường khi thiếu MCP (chỉ mất phần
-   snapshot/dò a11y).
-
----
-
-## 3.2 Kết quả dò thật — chiến dịch 熊本店 OP-18 (2026-11-14)
-
-Chiến dịch: `ECCL00000062_20261121_1127_016` (抽選 2026/11/21–24, 申込 11/11 10:00 →
-**11/15 23:59**, 当選発表 11/18 17:00). 23 tài khoản nạp từ danh sách người dùng.
-
-### Đường đăng nhập đúng là form Parks2, không phải BNID
-
-| Tài khoản | BNID (`#mail`/`#pass`) | Form Parks2 (`#LOGINID`/`#PASSWORD`) |
-|---|---|---|
-| trinha1@hotmail.com / Boss2201 | ✗ 「メールアドレスまたはパスワードが間違っている」 | ✗ |
-| trinha3@hotmail.com / Boss2019 | — | ✓ |
-| trinha4@hotmai.com / Boss2019 | — | ✗ (sai tên miền `hotmai.com`) |
-| trinha5@outlook.com / Boss2019 | — | ✓ |
-
-⇒ recipe dùng `login.url = parks2…/login.html?request=redirect_logon&redirectTo=member_mypage.html`:
-một form duy nhất, **không có bước passkey** như BNID.
-
-### Luồng thật của trang (đã dò từng bước)
-
-```
-/login.html            #LOGINID #PASSWORD → input[type=submit][value="ログイン"]
-/member_mypage.html    đăng nhập xong (dấu hiệu: a[href*="request=logoff"])
-/item/<mã>.html        popup #kessai-method-modal (本人確認書類)
-                       → tick #confirmCheck → bấm #closePopupButton (閉じる, disabled tới khi tick)
-                       #PRIORITY_ITEMPROPERTY_CD_MATRIX_0  (種類: 日付+集合時間)
-                       #CART_AMOUNT_0 (数量, chỉ có 1)
-                       #addCart (カートに入れる) → popup có a:has-text("購入手続きに進む")
-/cart_index.html       a[onclick*="cart_seisan.html"]  (次へ)
-/cart_seisan.html      ご注文情報入力 ← **điểm pause**
-```
-
-Số liệu slot của chiến dịch: `159016_1121_1100_1` = 11/21(土) 11:00, tương tự
-`_1330`, `_1600`, `_1830`, và `1122…1124` cho các ngày sau.
-
-### Đã chạy mẫu (2/23 tài khoản, IP máy, không proxy)
-
-| Tài khoản | Kết quả | Ghi chú |
-|---|---|---|
-| trinha3@hotmail.com | `paused` — cửa sổ cổng **9400** ở `/cart_seisan.html` | Thiếu 郵便番号/都道府県/市区町村 ⇒ người dùng tự điền |
-| trinha5@outlook.com | `paused` — cửa sổ cổng **9401** ở `/cart_seisan.html` | Địa chỉ + SĐT đã có sẵn, chỉ cần bấm 入力内容を確認する |
-
-Cửa sổ được giữ nhờ `--hold-open` (tiến trình Python phải còn sống thì Chrome mới còn);
-ảnh bằng chứng ở `browser_artifacts/<ngày>/*_paused.png`.
-
----
-
-## 3.3 Hồ sơ đặt hàng & thanh toán — người dùng nhập trong UI
-
-Tab **Cấu hình → nhóm “Thông tin đặt hàng & thanh toán”**: người dùng nhập/sửa địa chỉ
-nhận hàng và thẻ thanh toán. **Không có giá trị nào hard-code trong code**; recipe chỉ
-tham chiếu biến, nên đổi thông tin là đổi cho mọi lượt chạy.
-
-### Trường và biến
-
-| Nhóm | Trường | Biến trong recipe |
-|---|---|---|
-| Người nhận | 姓 / 名 / セイ / メイ | `{l_name}` `{f_name}` `{l_kana}` `{f_kana}` |
-| Địa chỉ | 郵便番号 / 都道府県 / 市区町村 / 丁目・番地 / ビル名 | `{zip}` `{pref}` `{city}` `{street}` `{building}` |
-| Địa chỉ | tick 「ビル・マンション名・部屋番号なし」 | `{building_none}` = `1` / rỗng |
-| Liên hệ | 携帯電話番号 | `{tel}` |
-| Thẻ | tên in trên thẻ / số thẻ / MM/YY / CVV | `{card_holder}` `{card_number}` `{card_exp}` `{card_exp_month}` `{card_exp_year}` `{card_cvv}` |
-
-### Thành phần
-
-| File | Trách nhiệm |
-|---|---|
-| `app/domain/checkout.py` | `FIELDS`/`CARD_FIELDS`/`PREFECTURES`, `clean()`, `validate()` (Luhn, hạn dùng, 7 số bưu điện, 10–11 số ĐT, 都道府県 hợp lệ), `summary()` (chỉ in `**** **** **** 1234`, không bao giờ in CVV), `profile_vars()` |
-| `app/infrastructure/checkout_store.py` | `CheckoutStore`: đọc/ghi `checkout_profile.json`, **mỗi giá trị mã hoá DPAPI** (`CryptProtectData`), `icacls` thắt quyền, cờ `encrypted:false` khi máy không dùng được DPAPI |
-| `app/ui/dialogs.py::CheckoutDialog` | form nhập (combo 都道府県, CVV `EchoMode.Password`), chỉ validate — không tự lưu |
-| `app/ui/main_window.py` | nhóm trong tab Cấu hình: dòng tóm tắt + `Nhập/sửa thông tin...` + `Xoá thông tin` |
-| `app/container.py` | một `CheckoutStore` dùng chung: UI ghi, `BrowserCampaignService` đọc |
-
-### Cách engine dùng hồ sơ
-
-- `BrowserCampaignService.run()` đọc hồ sơ **một lần cho cả lượt chạy**, log
-  `checkout.summary()` (đã che thẻ) và cảnh báo các trường 必須 còn thiếu.
-- `CampaignBrowserRunner(card=profile_vars(...))` render `{zip}`, `{card_number}`… vào
-  selector/value của từng bước.
-- Hai thuộc tính bước giữ an toàn dữ liệu thành viên:
-  - `"when": "{zip}"` — chỉ chạy khi biến có giá trị (rỗng/0/false ⇒ bỏ bước, có log).
-  - `"only_if_empty": true` — không ghi đè ô mà site đã điền sẵn. Mặc định dùng cho
-    toàn bộ bước điền địa chỉ trong recipe, vì form ご注文情報入力 cảnh báo
-    「ご依頼主情報を変更するとマイページの会員情報も変更されます」 (sửa là đổi luôn hồ sơ
-    thành viên).
-- Bước dùng `{card_*}` mà chưa có thẻ ⇒ dừng với lỗi rõ ràng, không điền chuỗi rỗng.
-- Biến không có trong context bị render thành rỗng (không để chữ `{building}` dính vào form).
-
-### Bảo mật
-
-1. Thông tin thẻ **không** nằm trong `ui_settings.ini`; file riêng `checkout_profile.json`,
-   git-ignored, giá trị mã hoá DPAPI của tài khoản Windows đang dùng.
-2. Không ghi log giá trị thẻ/CVV: chỉ `checkout.summary()` (đã che). `_missing_card_tokens`
-   báo *tên* biến thiếu, không báo giá trị.
-3. Hồ sơ là **một bộ dùng chung cho mọi tài khoản**. Với tài khoản có địa chỉ khác, để trống
-   trường đó (recipe sẽ giữ nguyên dữ liệu site đang có) thay vì điền đè.
-4. DPAPI không khả dụng (không phải Windows) ⇒ store vẫn lưu nhưng trả cờ `encrypted:false`
-   và UI hiện “CHƯA mã hoá” để người dùng biết.
-
-
-
-
----
-
-## 4. Logic tab Cấu hình — Proxy
-
-### File `proxy.txt`
-
-Mỗi dòng 1 proxy. Định dạng chính: `ip:port:username:pass`.
-
-`parse_proxy(line)` chấp nhận thêm: `ip:port`, `user:pass@ip:port`,
-`http(s)://ip:port:username:pass`. Dòng `#` hoặc `//` = comment. Mật khẩu được
-`quote()` khi dựng URL nên chứa được `:` và `@`.
-
-```python
-"1.2.3.4:8080:usr:p@ss:w:rd"  →  http://usr:p%40ss%3Aw%3Ard@1.2.3.4:8080
-```
-
-### `proxy_manager.py`
-
-```python
-proxy_manager = ProxyManager()      # singleton dùng chung
-new_session()                       # -> ProxySession, dùng thay requests.Session()
-```
-
-| Thành phần | Trách nhiệm |
-|---|---|
-| `parse_proxy` | Dòng → dict `{host, port, username, password, scheme, raw}` hoặc lý do lỗi |
-| `proxy_url` / `as_requests_proxies` | Dict `{"http": url, "https": url}` |
-| `check_proxy` | GET một URL qua proxy, trả `(ok, message)` |
-| `check_all_proxies` | ThreadPoolExecutor 10 luồng, `emit(index, ok, msg)` |
-| `ProxyManager` | Giữ `path`, `enabled`, `mode`, `proxies`, `errors`; cursor luân phiên + `threading.Lock` |
-| `ProxySession(requests.Session)` | Override `request()` để gắn proxy |
-
-### Hai chế độ
-
-| Mode | Hành vi |
-|---|---|
-| `MODE_PER_REQUEST` | Mỗi HTTP request lấy proxy kế tiếp (vòng tròn) |
-| `MODE_PER_SESSION` | Proxy chọn một lần khi tạo session, giữ suốt phiên |
-
-### Tự đổi proxy khi IP bị chặn
-
-Site trả `UnexpectedRemoteAddress` (403, `予期しないIPアドレス…`, `is lockouted`) khi
-IP của proxy nằm trong blacklist — **không phải** lỗi tài khoản.
-
-| Thành phần | Trách nhiệm |
-|---|---|
-| `app/domain/ip_rules.py` | `is_ip_lockout()` quét dict/chuỗi/bytes tìm dấu hiệu chặn IP; `IPLockoutError`; `IP_LOCKOUT_REASON` (dùng chung với `describe_login_error`) |
-| `response_is_ip_lockout()` | Chỉ đọc body khi response là JSON hoặc có mã lỗi (trang HTML thường không chứa dấu hiệu) |
-| `ProxySession.request()` | Gặp lỗi chặn IP → `mark_blocked()` proxy vừa dùng rồi **gửi lại request bằng proxy kế tiếp**, tối đa `PROXY_ATTEMPTS = 5` proxy/request. Ở `MODE_PER_SESSION`, proxy mới thay luôn proxy cố định để request sau không quay lại IP chết |
-| `ProxyManager._blocked` | Proxy bị chặn nghỉ `BLOCK_COOLDOWN = 1800` giây (30 phút); `next_proxies()` bỏ qua. Khi tất cả đều nghỉ thì mở lại proxy hết hạn sớm nhất để app không kẹt hẳn |
-| `ProxyManager.blocked_entries()` / `reset_blocks()` | Danh sách tạm nghỉ (host:port + đếm ngược) và nút **DS tạm nghỉ** / **Bỏ tạm nghỉ** ở tab Cấu hình; bảng proxy hiện "Tạm nghỉ (bị chặn IP) mm:ss" |
-| `set_event_sink()` + `flush_proxy_log()` | Worker thread đẩy log vào `queue.Queue`, `QTimer` 250ms đổ ra `log_text` — mỗi request ghi `[email] METHOD host/path · proxy host:port · HTTP status`, mỗi lần chặn ghi proxy bị đưa vào tạm nghỉ và proxy dùng để gửi lại. `set_event_context()` gắn email của tài khoản đang chạy vào thread để log không lẫn giữa các luồng. Không log query (query của `login/init` chứa cookie) |
-| `check_proxy()` | Gọi `v3/login/init` của account-api thay vì `login.html` (trang login trả 200 cho mọi IP). Proxy không tới được API, trả JSON lỗi hoặc có dấu hiệu chặn IP → đánh dấu ✗ và tự vào danh sách tạm nghỉ; proxy kiểm tra lại thấy OK → tự ra khỏi danh sách |
-| `BandaiAuthClient` | Lỗi nằm trong `data.msg` (HTTP 200) cũng bị bắt → chạy lại cả luồng login/handoff/hồ sơ bằng session mới (`IP_LOCKOUT_ATTEMPTS = 2`, cookie làm mới). Hết proxy → `LoginOutcome(reason=IP_LOCKOUT_REASON)` thay vì báo sai mật khẩu |
-
-### Điểm nối vào luồng chính
-
-- `build_container()` mặc định đặt `session_factory = proxy_manager.new_session`, nên
-  `BandaiAuthClient` và `BandaiNameClient` đều đi qua proxy. Không client nào tự
-  `requests.Session()`.
-- `ProxyCheckWorker` gọi `check_all_proxies()` trực tiếp.
-- Tắt proxy → `next_proxies()` trả `None` → request đi thẳng như bản gốc.
-
-### Vòng đời trong UI
-
-```
-load_proxy_settings()   # đọc SettingsStore, blockSignals, apply_proxy_settings(reload_file=True)
-apply_proxy_settings()  # gán path/mode/enabled → proxy_manager.load() → refresh bảng → status
-```
-
-`refresh_campaign_table` tương tự pattern này cho chiến dịch.
-
-Keys: `proxy_file`, `proxy_enabled`, `proxy_mode` (đọc/ghi qua `SettingsStore`, không
-chạm `QSettings` trực tiếp ở services/UI).
-
----
-
-## 5. Luồng đăng nhập — chi tiết nhất
-
-Đây là phần dễ vỡ nhất của dự án. Logic nằm trong `BandaiAuthClient`
-(app/infrastructure/bandai_auth.py), UI chỉ nhận kết quả qua `LoginWorker`
-(app/ui/workers.py):
-
-```
-1. progress 10  → session = session_factory()  (mặc định = proxy_manager.new_session)
-2. progress 25  → GET LOGIN_URL?client_id&redirect_uri
-                  + tự set cookie `language` ở miền ACCOUNT_COOKIE_DOMAIN
-                  (getLanguage() của site luôn ghi cookie này)
-3. progress 40  → GET {API_URL}v3/login/init   → apply_response_cookies()
-                  (cấp cookie `challengeProd`; BỎ BƯỚC NÀY thì Parks2 không trả
-                   btn-next và không bao giờ đọc được hồ sơ)
-4. progress 55  → POST {API_URL}v3/login/idpw  (login_id, password, env_info, cookie…)
-5. progress 70  → describe_login_error(payload)  (mục 5.0, app/domain/login_rules.py)
-                    ├─ bị khoá đăng nhập (nhập sai quá số lần)
-                    │    → _parks2_login() (mục 5.0.2) — vẫn vào được thì đi tiếp
-                    │    → không vào được thì LoginOutcome(success=False, reason)
-                    ├─ lỗi khác → LoginOutcome(success=False, reason) và DỪNG ở đây
-                    └─ không lỗi → complete_parks2_handoff()  (mục 5.1)
-                                    → fetch_member_profile() (mục 5.2)
-6. progress 100
-```
-
-`login()` trả `(AuthenticatedSession|None, reason)`; `authenticate()` chạy trọn
-login → handoff → hồ sơ và trả `LoginOutcome(success, reason, profile, profile_fields,
-handoff, note)` — luôn thử đọc hồ sơ kể cả khi handoff báo lỗi. `note` là ghi chú
-thêm cho log (ví dụ đã phải vào bằng form Parks2).
-
-### 5.0 `result == "OK"` KHÔNG có nghĩa là đăng nhập được
-
-Đây là bug đã gây ra hiện tượng "đăng nhập thành công nhưng không đọc được hồ sơ".
-Server trả `result: "OK"` cho mọi request được xử lý, kể cả khi sai mật khẩu:
-
-| Tình huống | `result` | `input_error` | `redirect` |
-|---|---|---|---|
-| Sai email/mật khẩu | `OK` | có `error_msg.other` (tiếng Nhật) | **không có** |
-| Đúng credentials, env_info sai | `NG` | null | `…/error.html` |
-| Đúng credentials, đúng env_info | `OK` | null | `passkeyInfo.html?...&code=…` |
-
-`describe_login_error(payload)` là hàm duy nhất quyết định thành/bại: kiểm tra
-`result`, rồi `input_error.error_msg`, rồi redirect phải tồn tại và không phải
-`error.html`. `LOGIN_ERROR_TRANSLATIONS` dịch hai câu tiếng Nhật hay gặp nhất sang
-tiếng Việt để log dễ đọc. **Đừng** quay lại so `result == "OK"`.
-
-### 5.0.1 Định dạng dữ liệu tài khoản
-
-List tài khoản là `email|password|token` (3 trường). `parse_account_line()`
-(app/domain/accounts.py) tách theo **từng dấu `|`**: email = trường 1, password = trường 2,
-token = phần còn lại.
-Bản cũ dùng `split('|', 1)` nên mật khẩu bị dính luôn token (`Letuemy…|k1gx82rp`) →
-mọi tài khoản đều sai credentials. `migrate_split_passwords()` chạy trong
-`AccountRepository.load()` sửa một lần cho dữ liệu đã lưu và chuyển phần thừa sang key
-`token`; `AccountService.export_lines()` ghi lại đủ 3 trường để round-trip không mất dữ liệu.
-
-### 5.0.2 Hai hệ thống đăng nhập khác nhau — BNID và Parks2
-
-Parks2 **không** chỉ đăng nhập qua BNID. Trang
-`https://parks2.bandainamco-am.co.jp/login.html?request=redirect_logon&redirectTo=member_mypage.html`
-có **form riêng** (`<form action=".../top_login.html">`, field `LOGINID`/`PASSWORD`)
-dùng cùng email/mật khẩu nhưng là hệ thống phiên khác (`JSESSIONID`, `BM-session-id`).
-Trang đọc thông số là `https://parks2.bandainamco-am.co.jp/member_mypage.html`.
-
-Hệ quả thực tế: một tài khoản có thể **bị BNID khoá đăng nhập** (nhập sai mật khẩu
-quá số lần) mà **vẫn đăng nhập được bằng form Parks2**. Khi BNID trả câu
-`間違ったパスワードが一定回数入力された為、ログインを制限しております`,
-`is_password_lockout()` (app/domain/login_rules.py) nhận ra và
-`BandaiAuthClient._parks2_login()` thử form Parks2:
-
-```
-GET  /login.html?request=redirect_logon&redirectTo=member_mypage.html
-     → parks2_login_fields(html)   lấy mọi <input> của form top_login.html
-POST /top_login.html  (LOGINID, PASSWORD + các field ẩn của framework)
-     → 200 + URL chứa member_mypage.html  = thành công
-```
-
-Chỉ thử khi gặp đúng lỗi khoá, nên mật khẩu sai thật **không** bị cộng thêm lần sai.
-Phiên này đã là phiên Parks2 nên `AuthenticatedSession.parks2_direct = True`:
-`authenticate()` bỏ qua handoff và đọc thẳng `fetch_member_profile()`;
-`BandaiNameClient.open_edit_page()` cũng bỏ qua handoff nên đổi tên vẫn chạy.
-
-### 5.1 Parks2 handoff — `complete_parks2_handoff()`
-
-(app/infrastructure/bandai_profile.py)
-
-Mục tiêu: hoàn tất đăng nhập Parks2 **không tạo passkey**.
-
-```
-redirect URL từ server → parse code
-  → GET v3/passkey/info?client_id&code&...    (X-Requested-With: XMLHttpRequest)
-  → result != "OK"              → HandoffResult(ok=False, status="Could not complete...")
-  → apply_response_cookies()    (có `value` = set, thiếu = xoá)
-  → data.btn.btn-next.url      → GET url (Accept HTML) → phải về parks2.bandainamco-am.co.jp
-```
-
-**Bẻ nhánh quan trọng:** handoff fail **không** đồng nghĩa Parks2 không dùng được.
-`BandaiAuthClient.authenticate()` luôn gọi thêm `fetch_member_profile()` và chỉ ghi đè
-`profile_fetch_status` khi lấy được hồ sơ. Mỗi lần đọc hồ sơ thành công,
-`AccountService.apply_profile()` ghi thêm `profile_loaded_at` (thời điểm đăng nhập
-thành công gần nhất) — khác với `last_check` là lần **thử** gần nhất, kể cả thất bại.
-
-### 5.2 Đọc hồ sơ — `fetch_member_profile()`
-
-```
-GET parks2.bandainamco-am.co.jp/member_mypage.html
-  ├─ status != 200 hoặc URL không chứa "member_mypage"  → fallback sang edit form
-  └─ parse_member_mypage_html()   (HTMLParser, mảng nhãn tiếng Nhật)
-        + điền thêm trường còn thiếu bằng fetch_edit_profile()
-```
-
-Nhãn Nhật được map sang key tiếng Anh trong `field_map`. Điểm hiểm: `points` phải
-trích bằng regex trên text đã bỏ tag vì nó nằm ngoài cặp `dt/dd`.
-Tài khoản thật đã kiểm chứng trả về 16 trường (kanji/kana, nickname, giới tính, địa
-chỉ, điện thoại, điểm, trạng thái BNID…).
-
-### 5.3 Đổi tên / sửa hồ sơ — `BandaiNameClient.change_profile()`
-
-Site là flow Interfactory **hai bước**; POST một lần duy nhất không sửa được gì:
-
-```
-login + handoff + GET member_regist.html?request=edit   → parse_name_form(html, url, "memberFrm")
-POST action (request=confirm, đủ 5 field tên + trim)     → HTML có <form name="confirmForm">
-POST member_regist_confirm.html (request=execute,
-     token + CONFIRM_TOKEN)                               → lưu thật
-GET lại trang edit                                        → so từng field đã override
-```
-
-Ba điểm phải giữ:
-
-- **Chọn đúng form.** Trang edit chứa cả form tìm kiếm ở header/mobile
-  (`action="item_list.html"`); `form_block_html(html, form_name)` lấy theo
-  `name="memberFrm"` / `name="confirmForm"`. Chọn form đầu tiên là gửi sai chỗ.
-- **Gửi đủ mọi field.** `NameForm.form_data()` nạp giá trị hiện tại rồi mới đè override;
-  thiếu `L_KANA`/`F_KANA`/`NICKNAME` là xoá dữ liệu thật của tài khoản, thiếu
-  `jp.co.interfactory.framework.trim.<FIELD>` thì framework bỏ qua submit.
-- **Xác minh bằng đọc lại.** `change_profile` so từng field đã gửi với trang đọc lại;
-  khác nhau trả thất bại kèm "Trang vẫn hiển thị: ...".
-
-GUI (`ChangeNameWorker`) chỉ gửi hai trường Kanji qua `kanji_overrides()`; CLI
-`change_name.py` cho phép thêm kana/nickname. Kết quả được đo thành công khi status 200
-và HTML **không chứa** `error`/エラー.
-
-**Rủi ro đã biết:** cả hai bước đều dựa vào regex trên HTML, nên site đổi layout là
-gãy. Nếu cần sửa, hãy kiểm tra lại form action và tên hidden input trước.
-
-### 5.4 env_info phải đúng dạng của site
-
-`getEnvInfo()` trong `js/webauthn-client.js` chỉ trả về **hai** trường, lấy từ
-`navigator.userAgentData`:
-
-```python
-ENV_INFO = json.dumps({"mobile": False, "platform": "Windows"}, separators=(",", ":"))
-```
-
-Dạng cũ `{ua, lang, plat, sw, sh}` là tự bịa; server không nhận và trả
-`result: NG` kèm `data.msg = "bnidv3 auth_sns_user get {'title': 'BadRequest', 'status': 400…}"`
-rồi redirect về `error.html`. `USER_AGENT` vẫn là hằng số duy nhất cho **header**.
-
----
-
-## 6. Quản lý luồng (threading)
-
-Tất cả network call chạy trong `QThread` để không block UI. Worker nằm trong
-`app/ui/workers.py` và **nhận client từ ngoài** (`auth_client`, `name_client`) thay vì
-tự tạo — truyền client giả là test được worker mà không cần mạng.
-
-| Worker | Signal | Dùng cho |
-|---|---|---|
-| `LoginWorker` | `result_ready(str,bool,str)`, `profile_ready(str,dict)`, `progress(int)` | 1 tài khoản; gọi `auth_client.authenticate()` rồi dịch `LoginOutcome` sang thông báo tiếng Việt |
-| `BatchCheckWorker` | `result_ready`, `profile_ready`, `account_progress(str,int)`, `progress(int,int)`, `finished_checking` | Nhiều tài khoản **song song**: `ThreadPoolExecutor(max_workers=self.max_workers)` submit `_check_one` cho từng cặp email/password; `as_completed` tăng bộ đếm và emit `progress(completed, total)`. `max_workers` clamp `1..MAX_CONCURRENCY` ngay trong `__init__`. |
-| `ChangeNameWorker` | `result_ready`, `progress` | Đổi tên; gọi `name_client.change_profile(..., kanji_overrides(last, first), on_progress=self.progress.emit)` |
-| `ProxyCheckWorker` | `row_ready(int,bool,str)`, `finished_check` | Kiểm tra proxy song song |
-
-**Bẫy đã gặp:** `BatchCheckWorker` nối signal của `LoginWorker` con bằng
-`Qt.ConnectionType.DirectConnection` rồi gọi `run()` trực tiếp trong thread của pool (không
-`start()`). Tín hiệu vì vậy phát trên thread pool, nên handler phía UI chỉ được làm việc nhẹ
-(ghi dict + `viewport().update`) — muốn đổi sang `QueuedConnection` phải kiểm tra lại thứ tự
-`profile_ready`/`result_ready`.
-
-`_check_one` chuyển `LoginWorker.progress(int)` sang `account_progress(email, percent)` để
-fill của đúng dòng tài khoản (view nối vào `set_row_progress`).
-
-Hủy: `stop()` đặt `_is_running = False`; `run()` kết thúc bằng
-`pool.shutdown(wait=self._is_running, cancel_futures=not self._is_running)` — đang chạy thì
-chờ task hiện tại xong, bị stop thì hủy task còn xếp hàng. `_check_one` cũng kiểm tra
-`_is_running` nên tài khoản bị hủy không phát signal, không để lại fill trên dòng.
-`finished_checking` luôn emit sau khi pool đóng (view dùng nó để ẩn progress bar).
-
-**Worker phải được giữ tham chiếu:** mọi `worker.start()` đi qua `start_worker()` của view,
-thêm worker vào `self.workers` và tự gỡ khi thread phát `finished`. Trước đây worker chỉ nằm
-ở `self.worker` nên lần kiểm tra kế tiếp làm GC một `QThread` còn đang chạy — Qt abort
-("QThread: Destroyed while thread is still running"), và `closeEvent()` không dừng được gì
-vì `self.workers` luôn rỗng.
-
-`closeEvent()` gọi `stop()` cho worker đang chạy rồi `save_data()`.
-
----
-
-## 7. Bảng settings QSettings
-
-Cấu hình được lưu trong `ui_settings.ini` **ngay trong thư mục dự án** (do
-`build_container()` truyền `SETTINGS_FILE` vào `SettingsStore`), nên copy cả thư mục
-sang máy khác vẫn giữ nguyên cấu hình. Lần chạy đầu tiên, nếu file chưa có,
-`SettingsStore` chép toàn bộ key cũ từ registry `NAMCO/AccountManager` sang file
-(không mất cấu hình đang dùng). `SettingsStore()` không truyền `path` vẫn dùng
-registry như trước — dùng cho test.
-
-| Key | Kiểu | Mặc định |
-|---|---|---|
-| `campaigns` | chuỗi JSON | `"[]"` |
-| `proxy_file` | str | `PROXY_FILE` (cạnh app) |
-| `proxy_enabled` | bool | `False` |
-| `proxy_mode` | str | `"per_request"` |
-| `theme` | str | `"light"` |
-| `accent` | str | `"#d61718"` |
-| `font_size` | int | `9` |
-| `compact` | bool | `False` |
-| `campaign_signups` | chuỗi JSON | `"{}"` — map `"tên\|link"` → danh sách `{email, at}` |
-| `hidden_account_columns` | chuỗi JSON | `"[]"` — tập key cột đang ẩn, `set_column_hidden()` ghi |
-| `max_workers` | int | `DEFAULT_CONCURRENCY` = **5**, clamp `1..MAX_CONCURRENCY` (10) khi đọc và khi ghi |
-| `browser_submit` | bool | `True` — có tự bấm nút gửi khi chạy chiến dịch bằng Chrome hay không (UI luôn hỏi xác nhận trước khi chạy) |
-| `browser_parallel` | int | `1`, clamp `1..MAX_BROWSER_PARALLEL` (3) — số cửa sổ Chrome song song |
-| `browser_headless` | bool | `False` — chạy Chrome ẩn (chỉ bật khi đã tin recipe) |
-| `browser_recipe` | str | rỗng ⇒ dùng `BROWSER_RECIPE_FILE` (`recipes/parks2_campaign.json`) |
-| `window_geometry` | QByteArray | — `saveGeometry()`, khôi phục bằng `restoreGeometry()` |
-| `window_state` | QByteArray | — `saveState()` (vị trí toolbar/dock) |
-| `active_tab` | int | `0` — tab đang mở lúc đóng app |
-| `log_panel_visible` | bool | `False` — bảng nhật ký đang bật hay tắt |
-
-`restore_ui_state()` chạy cuối `AccountManager.__init__`; `save_ui_state()` chạy trong
-`closeEvent` trước `save_data()`. Nhờ vậy mở lại app là đúng tab, đúng kích thước
-cửa sổ, đúng trạng thái bảng nhật ký như lần trước.
-
-UI/services không tự chạm `QSettings`; mọi reading/ghi đi qua `SettingsStore`
-(`get/get_bool/get_int/set`, `get_json/set_json`) và `Container.settings`.
-
-`apply_styles()` **xoá stylesheet của toàn bộ widget con** rồi áp `build_stylesheet()`
-(app/ui/styles.py) theo theme, nên mọi style tĩnh phải nằm trong bảng QSS của module đó
-(dùng `objectName`).
-
----
-
-## 8. Quy trình làm việc cho AI Agent
-
-### Chạy app
+| `accounts_data.json` | danh sách tài khoản (email, password, trạng thái, hồ sơ) | ignored |
+| `web_settings.json` | tuỳ chọn UI/API (campaigns, proxy, browser, max_workers) | ignored |
+| `ui_settings.ini` | tuỳ chọn bản desktop cũ — chỉ dùng để chép sang lần đầu | ignored |
+| `proxy.txt` | `ip:port:username:password` | ignored |
+| `checkout_profile.json` | hồ sơ đặt hàng/thẻ (DPAPI) | ignored |
+| `recipes/*.json` | công thức thao tác | tracked |
+| `browser_profiles/`, `browser_artifacts/` | profile Chrome, ảnh/HTML | ignored |
+
+## 9. Chạy & kiểm thử
 
 ```powershell
-python -m pip install -r requirements.txt
-python account_manager.py          # hoặc start.bat / install.bat
+start.bat                  # = python start.py: cài thiếu, build UI, free port, API + Electron
+python start.py --rebuild  # build lại UI tĩnh
+python start.py --dev-ui   # Next dev :3000 + Electron (sửa UI nóng)
+python start.py --web      # chỉ API
+python server.py --help    # --port, --kill-port/--no-kill-port, --pick-port
 ```
 
-Phần chạy chiến dịch bằng trình duyệt cần thêm:
+- Cổng API mặc định 8787; `tools.port_tools.pick_port()` kill tiến trình cũ rồi bind lại,
+  nếu vẫn bận thì nhảy cổng kế tiếp và truyền `API_BASE` cho Electron (không phải build lại UI).
+- Kiểm thử nhanh: `python -m pyflakes api app tools server.py start.py`,
+  `python browser_campaign.py --check`, hoặc `TestClient` với `ApiState(data_file=tmp, …)`.
 
-```powershell
-python -m pip install playwright          # có trong requirements.txt
-cmd /c "npm.cmd i -g chrome-devtools-mcp"  # PowerShell chặn npm.ps1 => gọi npm.cmd
-python browser_campaign.py --check        # kiểm tra recipe + tìm chrome.exe
-```
+## 10. Quy tắc bắt buộc
 
-### Kiểm thử phần trình duyệt không cần tài khoản thật
-
-Engine recipe chạy được trên trang HTML giả, nên kiểm chứng offline:
-
-```python
-# 1) Playwright mở đúng Chrome, cấp port, chụp ảnh
-from app.infrastructure.browser.browser_session import BrowserSession
-# 2) chrome-devtools-mcp gắn vào đúng cổng đó: list_pages + take_snapshot
-from app.infrastructure.browser.mcp_client import DevtoolsMcpClient
-# 3) CampaignBrowserRunner trên file:///…/campaign.html:
-#    submit=False -> STATUS_DRY_RUN, submit=True + câu "受付が完了" -> STATUS_REGISTERED
-# 4) recipe có khối login: trang login giả -> campaign.html có #menu => login OK
-```
-
-Đã dùng cách này để xác nhận: `dry_run` không bấm gửi, `submit` bấm và đọc được câu
-xác nhận, ảnh chụp được ghi ra, luồng login chạy đúng. Chạy UI offscreen
-(`QT_QPA_PLATFORM=offscreen`) với `build_container(settings=SettingsStore(path=tmp),
-recipe_path=…)` để kiểm tra widget + `preflight()` chặn recipe nháp.
-
-### Kiểm thử thay đổi
-
-Không có test suite trong repo (`.gitignore` chặn `test_*.py`). Cách kiểm chứng đã
-dùng và hiệu quả: script tạm với `QT_QPA_PLATFORM=offscreen`, chèn dữ liệu giả vào
-widget, khẳng định trạng thái, rồi **xoá file tạm**. Sau khi tách MVC/DI thì không cần
-patch mạng nữa:
-
-```python
-container = build_container(data_file=duong_dan_temp, session_factory=lambda: FakeSession(),
-                            settings=SettingsStore(), on_log=print)
-window = AccountManager(container=container)      # service + client đều là đồ giả
-```
-
-- `FakeSession` (chỉ có `get`/`post` trả HTML dựng sẵn) chứng minh được flow đổi tên
-  chạy **đủ hai bước** `request=confirm` → `request=execute`.
-- `AccountRepository(path=temp)` cho test migrate/add/save mà không đụng
-  `accounts_data.json` thật.
-- Với network thật thì monkey-patch `requests.Session.get/post` để chặn và kiểm tra
-  header/payload thật.
-- Chạy `python -m pyflakes app/ account_manager.py change_name.py` để bắt tên chưa import.
-
-### Trước khi commit
-
-1. `python -m pyflakes app/ account_manager.py change_name.py`
-2. `python -m py_compile app/*.py app/*/*.py account_manager.py change_name.py proxy_manager.py`
-3. Xoá file tạm (`test_*_tmp.py`, `_*.py`, ảnh chụp màn hình, HTML dump chứa hồ sơ thật).
-4. `git status` phải sạch trừ các file chủ ý sửa.
-5. **Không** commit `accounts_data.json`, `proxy.txt`, `__pycache__/`.
-
-### Commit + push (bắt buộc)
-
-Sau mỗi thay đổi: commit rồi push lên `origin/main`, báo lại kết quả. Git identity
-chưa có sẵn trong máy, dùng:
-
-```powershell
-git -c user.name="vzetiZero" -c user.email="106722218+vzetiZero@users.noreply.github.com" commit -m "..."
-git push origin HEAD
-```
-
-Remote: `https://github.com/vzetiZero/bandainamcoApp.git`.
-
----
-
-## 9. Trạng thái triển khai
-
-### 9.1 Đã xong và đang chạy
-
-| Hạng mục | Commit | Ghi chú |
-|---|---|---|
-| Thêm/nhập/xuất tài khoản | `329f7e1` | Nhập dán `email\|password\|token` hoặc file TXT |
-| Đăng nhập + Parks2 handoff | `4079c14`, `4579c2c` | Không tạo passkey |
-| Parse hồ sơ từ mypage | `7f173c5`, `7c7d171` | Fallback sang edit form |
-| Sửa 2 trường tên Kanji | `c0d1bdc` | Không sửa ngày sinh (đã gỡ) |
-| Đổi tên qua form | `e65bc6f` | Regex trên HTML |
-| Lọc/tìm kiếm, context menu, export | `329f7e1` | |
-| Tab Chiến dịch | `86dcac5` | CRUD thủ công |
-| Context menu theo vùng chọn + confirm khi xóa | xem log | Kiểm tra/Copy/Xóa áp dụng cho **mọi** dòng đang chọn |
-| Fill tiến trình trong ô Email + kiểm tra đa luồng | xem log | `EmailProgressDelegate` + `PROGRESS_ROLE`; `BatchCheckWorker` dùng `ThreadPoolExecutor`, số luồng cấu hình được (mặc định 5) |
-| Panel nhật ký mặc định đóng, nút mở/đóng + Xóa log | xem log | `log_btn` checkable trên toolbar, `set_log_panel_visible()`, `clear_log()` |
-| Import TXT chuyển vào panel nhập tài khoản | xem log | `actionImport` → `load_txt_into_input()` đổ file vào ô nhập để xem trước; bỏ nút toolbar |
-| Trạng thái + lọc + cảnh báo chiến dịch | xem git log | Tính từ ngày, không nhập tay |
-| Đăng ký thủ công + ghi nhận tài khoản | xem git log | Mở link + clipboard, người dùng tự submit |
-| Proxy cho mọi request | `6ccd2d3` | + tab Cấu hình, kiểm tra proxy |
-| env_info đúng schema của site | xem git log | `{mobile, platform}` — mục 5.4 |
-| Thêm bước `v3/login/init` | xem git log | cấp cookie challenge cho handoff |
-| `describe_login_error()` thay cho `result=="OK"` | xem git log | hết báo "thành công" giả |
-| Tách đúng `email\|password\|token` + migrate | xem git log | 422 tài khoản từng lưu mật khẩu sai |
-| Màu cột Status | `10d8598` | Sửa bug so chuỗi không dấu |
-| Nút compact tab Nhập | `20d5914` | 4 nút một hàng |
-| Chủ đề sáng/tối, cỡ chữ | `717533c` | QSettings |
-| Tách MVC + DI toàn dự án | `662b2a6`…`c08bbd9` | `app/{config,domain,infrastructure,services,ui,container}`; `account_manager.py` còn 24 dòng |
-| Stylesheet ra khỏi view | `c08bbd9` | `app/ui/styles.py::build_stylesheet` + `read_appearance` |
-| Đổi tên chạy đủ 2 bước confirm/execute | `54369ee` | `BandaiNameClient.change_profile`; CLI cũ chỉ POST bước 1 nên không bao giờ đổi |
-| Tự đổi proxy khi IP bị chặn | xem git log | `ip_rules` + retry trong `ProxySession`; proxy bị chặn nghỉ 300s |
-| Chạy chiến dịch bằng Chrome thật (mỗi tài khoản 1 profile + 1 proxy) | xem git log | `app/infrastructure/browser/*`, `BrowserCampaignService`, `BrowserCampaignWorker`, `recipes/parks2_campaign.json` (bản nháp) |
-
-### 9.2 Đã thử rồi bỏ
-
-| Hạng mục | Lý do |
-|---|---|
-| Sửa ngày sinh | Site không hỗ trợ qua form này (commit `8b96a95`) |
-| Random `client_id` | Phá vỡ OAuth — xem mục 1 |
-
-> **Đã đổi quyết định:** trước đây mục này ghi "Bot tự đăng ký chiến dịch — rủi ro cao,
-> app giữ mô hình thủ công". Nay app **có** luồng tự chạy bằng Chrome (mục 3.1) theo yêu
-> cầu, nhưng vẫn giữ nguyên luồng thủ công cũ và mặc định hỏi xác nhận trước khi chạy.
-> Rủi ro còn nguyên: submit hàng loạt có thể vi phạm ToS của NAMCO Parks và bị khoá
-> tài khoản/chặn IP — người dùng tự chịu trách nhiệm khi bật `Tự bấm gửi`.
-
-### 9.3 Chưa làm
-
-| Hạng mục | Mô tả | Mức độ ưu tiên |
-|---|---|---|
-| Recipe thật cho trang 抽選 | ✅ đã dò xong 2026-11-14 (mục 3.2), dừng ở `pause` trước bước chốt đơn | Xong |
-| Tự điền địa chỉ/thanh toán + chốt đơn | Recipe hiện `pause` tại `cart_seisan.html`; muốn auto hoàn toàn thì thêm bước fill địa chỉ + `submit` (nút 入力内容を確認する → 注文確定) | Trung bình |
-| Nhận diện captcha / bot-check | Chưa có; gặp captcha thì dừng và chụp ảnh để người dùng xử lý | Cao |
-| Ghim proxy theo profile | Hiện mỗi lượt chạy lấy proxy mới từ `next_proxy_entry()`, chưa ghim proxy theo profile Chrome | Trung bình |
-
-| Hạng mục | Mô tả | Mức độ ưu tiên |
-|---|---|---|
-| Import chiến dịch từ file | Nạp CSV/JSON (đã có export) | Trung bình |
-| Lọc "chưa đăng ký" trong danh sách tài khoản | Lọc account theo chiến dịch đang chọn để biết còn tài khoản nào chưa đăng ký | Trung bình |
-| Xuất danh sách tài khoản đã đăng ký | Ghi riêng file kèm thời điểm | Thấp |
-| Sắp xếp bảng chiến dịch | Sort theo tên / thời gian | Thấp |
-| Xoá nhiều chiến dịch | Chọn nhiều dòng | Thấp |
-| Số liệu proxy | Đếm số lần dùng / lỗi theo từng proxy | Trung bình |
-| Hỗ trợ SOCKS | Cần `pip install requests[socks]` | Thấp |
-| Đổi mật khẩu tài khoản | Chưa có luồng nào | Trung bình |
-| Sửa thêm trường hồ sơ | Kana, nickname, địa chỉ, sđt — `AccountDetailsDialog` đang read-only | Trung bình |
-| Kiểm tra hàng loạt song song | `BatchCheckWorker` vẫn chạy tuần tự | Trung bình |
-| Test suite | Chưa có file test được commit | Trung bình |
-| Log ra file | Nhật ký chỉ hiện trong RAM, mất khi đóng app | Thấp |
-
----
-
-## 10. Ràng buộc không được phá vỡ
-
-
-2. Không random `CLIENT_ID`, không bỏ qua `redirect_uri`.
-3. Không commit secret (`accounts_data.json`, `proxy.txt`).
-4. Mọi network call phải qua `new_session()` để còn dùng được proxy.
-5. Mọi network call trên UI phải bọc trong `QThread`.
-6. Style widget tĩnh phải khai báo trong `apply_styles()` qua `objectName`.
-7. `USER_AGENT` là nguồn duy nhất cho header HTTP. `ENV_INFO` là nguồn duy nhất cho
-   trường `env_info` và phải giữ đúng dạng `{mobile, platform}` (mục 5.4). Phần trình
-   duyệt thì dùng UA thật của Chrome, **không** gửi header tự chế.
-8. Phần trình duyệt: mỗi tài khoản một profile/port riêng (mục 3.1), selector nằm trong
-   `recipes/*.json` chứ không hard-code, `browser_profiles/` + `browser_artifacts/` là
-   git-ignored, và `submit` mặc định phải đi qua xác nhận của người dùng.
-9. **UI gọn, ít chữ:** không đặt đoạn giải thích dài trong thân tab/nhóm. Nội dung hướng dẫn
-   đặt ở `setToolTip()` của tab/nhóm/nút; nhãn trạng thái chỉ 1 dòng ngắn (chi tiết ở
-   tooltip hoặc thanh trạng thái). Thông báo kết quả dùng `status_bar.showMessage()` thay vì
-   popup, chỉ dùng `QMessageBox` khi cần người dùng quyết định (xác nhận xoá/chạy submit)
-   hoặc khi có lỗi phải đọc kỹ.
-
-
----
-
-## 12. UI web (Next.js + theme-ui) và API FastAPI
-
-Từ 2026-11-14 giao diện chính là **web**: Next.js (App Router) + `theme-ui`, còn Python giữ
-toàn bộ logic. Bản PySide6 vẫn còn trong repo (dùng được) nhưng là **legacy**.
-
-```
-Browser ──HTTP/JSON──> api/ (FastAPI)  ──> app/services ──> app/domain
-                           │                      │
-                           │                      └─> adapters: requests (BandaiAuth/Name),
-                           │                          Playwright + chrome-devtools-mcp,
-                           │                          AccountRepository, CheckoutStore
-                           └─ JobRegistry (thread nền) + LogBuffer
-```
-
-### Thành phần mới
-
-| File | Trách nhiệm |
-|---|---|
-| `server.py` | chạy API: `python server.py` → http://127.0.0.1:8787 (docs `/docs`) |
-| `api/app.py` | toàn bộ route REST + CORS; không chứa nghiệp vụ, chỉ gọi `ApiState` |
-| `api/state.py` | wiring `ApiState`, `LogBuffer` (nhật ký + `seq`), `JobRegistry` (job nền), các job: kiểm tra tài khoản, đổi tên, kiểm tra proxy, chạy chiến dịch, dò trang |
-| `app/infrastructure/file_settings.py` | `FileSettingsStore`: `web_settings.json`, cùng interface với `SettingsStore` (Qt) — lần đầu chép từ `ui_settings.ini` |
-| `web/` | Next.js 14 App Router + theme-ui 0.17: `app/`, `components/`, `lib/api.js`, `lib/hooks.js`, `theme.js` |
-| `start_api.bat` / `start_web.bat` | chạy API (8787) và giao diện (3000) |
-
-### Chạy
-
-```powershell
-python -m pip install -r requirements.txt          # + fastapi, uvicorn
-python server.py --no-browser                       # API  :8787
-cd web; npm install; npm run dev                    # UI   :3000
-```
-
-`NEXT_PUBLIC_API` đổi địa chỉ API (mặc định `http://127.0.0.1:8787`).
-
-### Trang
-
-| Trang | Nội dung |
-|---|---|
-| `/` Tổng quan | số tài khoản/chiến dịch, tình trạng recipe, hồ sơ đặt hàng, job gần đây, cửa sổ Chrome đang chờ |
-| `/accounts` | bảng tài khoản (lọc/tìm/chọn), kiểm tra một hoặc tất cả, thêm hàng loạt `email|password`, đổi tên, xoá |
-| `/campaigns` | CRUD chiến dịch, chọn dòng để xem đăng ký, chạy bằng Chrome (slot, submit, địa chỉ riêng từng tài khoản) |
-| `/settings` | proxy (bật/chế độ/file/kiểm tra/tạm nghỉ), recipe (đường dẫn + editor JSON), Chrome ẩn, số Chrome song song, luồng kiểm tra, hồ sơ đặt hàng & thẻ |
-
-### Job (tác vụ dài)
-
-`POST /api/accounts/check`, `/api/browser/run`, `/api/proxy/check`, `/api/browser/discover`
-đều trả `{id, status: "running", ...}`; UI poll `GET /api/jobs/{id}` mỗi ~0.9s tới khi
-`status != running`. Job chạy trong thread nền, log đổ vào `LogBuffer`
-(`GET /api/logs?after=<seq>`), proxy cũng đổ về đó qua `set_event_sink`.
-
-### Quy ước bảo mật của API
-
-1. **Không trả mật khẩu**: `account_public()` bỏ `password`, thêm `has_password`.
-2. **Không trả số thẻ/CVV**: `GET /api/checkout` trả `**** **** **** 1234` + `has_card`;
-   `PUT /api/checkout` với `card_number`/`card_cvv` rỗng nghĩa là **giữ giá trị cũ**.
-3. Địa chỉ riêng của từng tài khoản (`GET /api/accounts/{email}`) lấy từ hồ sơ Parks2;
-   khi chạy chiến dịch bật `use_account_address` để mỗi tài khoản dùng địa chỉ của chính nó
-   (`ApiState.account_checkout_vars` → `BrowserCampaignService.run(profile_for=...)`).
-4. `PUT /api/browser/recipe` validate trước khi ghi — sửa selector là sửa dữ liệu, không
-   phải sửa code.
-
-### Khác biệt so với bản desktop
-
-| | Desktop (legacy) | Web |
-|---|---|---|
-| UI | PySide6 | Next.js + theme-ui |
-| Tuỳ chọn | `ui_settings.ini` (QSettings) | `web_settings.json` (`FileSettingsStore`) |
-| Tác vụ dài | `QThread` + `Signal` | `JobRegistry` + polling |
-| Nhật ký | panel trong app | `LogBuffer` + dock nhật ký (poll) |
-| Dữ liệu chung | `accounts_data.json`, `checkout_profile.json`, `recipes/` | như trên |
-
-`web_settings.json` lần đầu được tạo sẽ chép giá trị từ `ui_settings.ini` (best-effort),
-nên danh sách chiến dịch đang dùng không bị mất khi chuyển sang web.
-
-### Kiểm thử
-
-```python
-# API: TestClient với file tạm (không gọi mạng)
-from api.app import create_app; from api.state import ApiState
-# - health/accounts/campaigns/settings/checkout/proxy
-# - PUT /api/checkout rồi assert "4242424242424242" không xuất hiện trong JSON trả về
-# - job proxy với danh sách rỗng: status -> done
-```
-
-Luồng trình duyệt qua API đã được chạy thử bằng recipe `data:text/html…` + `pause`:
-job `done`, item `paused`, `GET /api/browser/sessions` trả cổng/profile,
-`POST /api/browser/sessions/close` đóng được.
+1. Không đổi `CLIENT_ID`/`redirect_uri` của BNID; `env_info` phải đúng `{mobile, platform}`.
+2. Mọi network call qua `new_session()` (để dùng proxy); `USER_AGENT` là nguồn duy nhất cho header.
+3. Không commit secret (`accounts_data.json`, `proxy.txt`, `checkout_profile.json`).
+4. Selector nằm trong `recipes/*.json`; đổi site thì sửa dữ liệu, không hard-code.
+5. `submit` mặc định phải qua xác nhận của người dùng; recipe hiện dừng ở `pause` trước khi chốt đơn.
+6. API không trả mật khẩu/thẻ/CVV; log chỉ in `checkout.summary()` (đã che).
+7. UI gọn: giải thích đặt ở tooltip, nhãn trạng thái 1 dòng, kết quả dùng toast/status chứ không popup.

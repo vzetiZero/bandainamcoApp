@@ -1,4 +1,4 @@
-"""FastAPI app: mở toàn bộ nghiệp vụ của `app/` ra HTTP/JSON cho UI Next.js.
+﻿"""FastAPI app: mở toàn bộ nghiệp vụ của `app/` ra HTTP/JSON cho UI Next.js.
 
 Nguyên tắc:
 - Không có logic nghiệp vụ ở đây; chỉ đọc/ghi qua `ApiState` (services + domain).
@@ -508,4 +508,7 @@ def create_app(state: Optional[ApiState] = None) -> FastAPI:
     return api
 
 
-app = create_app()
+# Không tạo app ở module level: `python server.py` gọi create_app() đúng một lần, còn
+# --reload dùng uvicorn factory (`api.app:create_app`) để tránh hai ApiState cùng sống.
+
+
