@@ -75,6 +75,10 @@ Electron window (web/out) ──HTTP/JSON──> api/ (FastAPI) ──> app/serv
     `campaigns.json` (cờ `campaigns_migrated`, chỉ một lần).
 - Ghi nhận đăng ký theo khoá `"tên|link"` → `{campaign_key: [{email, at}]}`; dòng trùng khoá
   trong file chung (do gộp/git pull) được gộp khi nạp, giữ dòng sau.
+- UI tab chiến dịch: tài khoản **đã đăng ký chiến dịch đang chọn** bị ẩn khỏi danh sách chạy
+  (chỉ còn tài khoản chưa chạy để kiểm soát), hiện ở panel "Đã đăng ký" (mới nhất trước) và
+  có nút **Bỏ** (`DELETE /api/campaigns/{row}/signups/{email}`) để trả tài khoản về danh sách
+  chạy. Chạy xong job thì UI tự nạp lại danh sách đã đăng ký.
 - Trạng thái chạy: `registered`, `already`, `closed`, `paused`, `dry_run`, `unverified`,
   `login_failed`, `ip_blocked`, `error`, `skipped`; chỉ `registered`/`already` được ghi nhận.
   Bấm 注文する xong là **hoàn thành**: bước chờ `ご注文完了` để `"optional": true`, và nếu trang
