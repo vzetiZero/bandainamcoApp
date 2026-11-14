@@ -77,6 +77,9 @@ Electron window (web/out) ──HTTP/JSON──> api/ (FastAPI) ──> app/serv
   trong file chung (do gộp/git pull) được gộp khi nạp, giữ dòng sau.
 - Trạng thái chạy: `registered`, `already`, `closed`, `paused`, `dry_run`, `unverified`,
   `login_failed`, `ip_blocked`, `error`, `skipped`; chỉ `registered`/`already` được ghi nhận.
+  Bấm 注文する xong là **hoàn thành**: bước chờ `ご注文完了` để `"optional": true`, và nếu trang
+  không còn câu xác nhận thì `submit_done` vẫn cho `registered` (không còn báo "chưa thấy câu
+  xác nhận"); `unverified` chỉ dùng khi recipe **không có** bước bấm gửi.
 
 ## 4. Recipe (dữ liệu, không phải code)
 
@@ -147,8 +150,7 @@ trường **`token`** của tài khoản (`email|password|token`) và được t
 `{token}` (context của `render_value`); tài khoản không có token thì các bước đó tự bỏ qua
 (`"when": "{token}"`). Chiến dịch 熊本店 抽選 hiện **không** cần serial (đã bỏ các bước đó).
 
-Hai lỗi site hay gặp khi thêm giỏ:
-- 「景品ミニゲームの商品コードが指定されていません」 = **chưa chọn 種類 (ngày/giờ nhận)**;
+Hai lỗi site hay gặp khi thêm giỏ:- 「景品ミニゲームの商品コードが指定されていません」 = **chưa chọn 種類 (ngày/giờ nhận)**;
   runner báo kèm giải thích này thay vì chờ timeout.
 - 「カート内の商品数とカートに入れる商品数の合計が 1 以下でないためカート追加できません」
   = **giỏ đã có sản phẩm**. Không phải lỗi: runner bỏ qua bước thêm, vào thẳng trang giỏ

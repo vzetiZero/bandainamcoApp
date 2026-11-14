@@ -269,10 +269,16 @@ class CampaignBrowserRunner:
             result.ok, result.status = False, STATUS_ERROR
             result.message = "Trang báo lỗi sau khi gửi"
         else:
-            result.ok = result.submit_done
-            result.status = STATUS_UNVERIFIED
-            result.message = ("Đã bấm gửi nhưng không thấy câu xác nhận — xem ảnh chụp"
-                              if result.submit_done else "Chưa có bước bấm gửi trong recipe")
+            if result.submit_done:
+                # Đã bấm 注文する là xong; trang không còn câu xác nhận riêng thì vẫn tính
+                # là hoàn thành (không báo "chưa thấy câu xác nhận" nữa).
+                result.ok, result.status = True, STATUS_REGISTERED
+                result.message = "Đã gửi đăng ký — hoàn thành"
+                result.details["confirmation_text"] = False
+            else:
+                result.ok = False
+                result.status = STATUS_UNVERIFIED
+                result.message = "Chưa có bước bấm gửi trong recipe"
 
     def _ensure_login(self, session, email, password, campaign_url, result, report):
         """True khi đã ở trạng thái đăng nhập (hoặc recipe không cần đăng nhập)."""
@@ -605,11 +611,23 @@ class CampaignBrowserRunner:
             else:
                 page.keyboard.press(key)
         elif action == "wait_text":
-            page.wait_for_function(
-                "(text) => document.body && document.body.innerText.includes(text)",
-                arg=value, timeout=timeout)
+            try:
+                page.wait_for_function(
+                    "(text) => document.body && document.body.innerText.includes(text)",
+                    arg=value, timeout=timeout)
+            except Exception:  # noqa: BLE001 - bước "optional" thì không chặn lượt chạy
+                if not step.get("optional"):
+                    raise
+                self.on_log("[%s] không thấy câu '%s' (bước tuỳ chọn) — coi như đã xong"
+                            % (email, value))
         elif action == "wait_selector":
-            page.wait_for_selector(selector, timeout=timeout)
+            try:
+                page.wait_for_selector(selector, timeout=timeout)
+            except Exception:  # noqa: BLE001
+                if not step.get("optional"):
+                    raise
+                self.on_log("[%s] không thấy %s (bước tuỳ chọn) — bỏ qua"
+                            % (email, selector))
         elif action == "sleep":
             page.wait_for_timeout(int(float(value) * 1000))
         elif action == "screenshot":

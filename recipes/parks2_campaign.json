@@ -265,7 +265,7 @@
         "requires_submit": true
       },
       {
-        "name": "chờ trang ご注文完了",
+        "name": "chờ ご注文完了 (tuỳ chọn: bấm 注文する xong là hoàn thành)",
         "action": "wait_text",
         "value": "ご注文完了",
         "requires_submit": true,
