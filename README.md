@@ -21,35 +21,49 @@ Windows desktop app for organizing BANDAI NAMCO ID / NAMCO Parks accounts.
 
 ## Setup
 
-Two processes: the Python API (all logic) and the Next.js UI.
+One entry point starts everything (API + desktop window):
 
 ```powershell
-python -m pip install -r requirements.txt          # requests, PySide6, playwright, fastapi, uvicorn
-cmd /c "npm.cmd i -g chrome-devtools-mcp"          # MCP server for page discovery
-
-python server.py --no-browser                       # API  → http://127.0.0.1:8787  (docs: /docs)
-cd web
-npm install
-npm run dev                                         # UI   → http://localhost:3000
+start.bat                 # hoặc: python start.py
 ```
 
-Or double-click `start_api.bat` and `start_web.bat`. Requires Python 3.10+, Node.js LTS and
-Google Chrome.
+`start.py` does the whole job: installs missing Python/Node dependencies, builds the static UI
+when sources changed, **frees the API port (kills the stale process and rebinds)**, starts the
+Python API, waits for `/api/health`, then opens the Electron window.
 
-`npm.ps1` is blocked by the default PowerShell execution policy, so call `npm.cmd` (or run
-`Set-ExecutionPolicy -Scope Process Bypass` first). The legacy PySide6 desktop app still runs
-with `python account_manager.py` / `start.bat`.
+```powershell
+python start.py --rebuild          # build lại UI tĩnh trước khi mở
+python start.py --port 8800        # cổng API khác (vẫn kill tiến trình cũ giữ cổng đó)
+python start.py --no-pick-port     # không tự nhảy cổng nếu kill xong vẫn bận
+python start.py --dev-ui           # Next dev (:3000) + Electron trỏ vào đó để sửa UI nóng
+python start.py --web              # chỉ chạy API (dùng trình duyệt với UI web)
+```
 
-Set `NEXT_PUBLIC_API` if the API is not on `http://127.0.0.1:8787`.
+Manual install (equivalent): `python -m pip install -r requirements.txt`,
+`cd web && npm install`, `cd desktop && npm install`. Requires Python 3.10+, Node.js LTS and
+Google Chrome. `npm.ps1` is blocked by the default execution policy — call `npm.cmd` (or run
+`Set-ExecutionPolicy -Scope Process Bypass` first). `install.bat` does the same steps including
+installing the Electron binary (npm may block its postinstall) and building `web/out`.
+
+The legacy PySide6 desktop app still runs with `start_qt.bat` / `python account_manager.py`.
+
+## Runtime shape
+
+- **Electron** (`desktop/`) renders the exported Next.js build from `web/out` over an internal
+  `app://` protocol — no HTTP server for the UI, so no extra port to collide with.
+- **Python API** (`server.py` → `api/`) owns all logic and listens on `127.0.0.1:8787`
+  (configurable). Electron gets the address through `API_BASE`, so the UI build does not need to
+  be rebuilt when the port changes.
+- Closing the Electron window stops the API; `Ctrl+C` in the console stops both.
 
 ## Architecture
 
 ```
-Browser ──HTTP/JSON──> api/ (FastAPI)  ──> app/services ──> app/domain
-                          │                     └─> adapters: requests (Bandai auth/name),
-                          │                        Playwright + chrome-devtools-mcp,
-                          │                        AccountRepository, CheckoutStore
-                          └─ JobRegistry (background threads) + LogBuffer
+Electron window ──HTTP/JSON──> api/ (FastAPI)  ──> app/services ──> app/domain
+                                  │                     └─> adapters: requests (Bandai auth/name),
+                                  │                        Playwright + chrome-devtools-mcp,
+                                  │                        AccountRepository, CheckoutStore
+                                  └─ JobRegistry (background threads) + LogBuffer
 ```
 
 Long tasks (checking accounts, running a campaign in Chrome, probing proxies, page discovery)

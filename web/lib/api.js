@@ -1,5 +1,11 @@
 // Client gọi API Python. Không cache: dữ liệu luôn là trạng thái mới nhất.
-export const API_BASE = process.env.NEXT_PUBLIC_API || 'http://127.0.0.1:8787'
+// Electron truyền địa chỉ API lúc chạy (preload → window.__API_BASE__) để không phải
+// build lại UI khi API đổi cổng; bản web dùng NEXT_PUBLIC_API.
+const runtimeBase =
+  typeof window !== 'undefined' && window.__API_BASE__ ? window.__API_BASE__ : ''
+
+export const API_BASE =
+  runtimeBase || process.env.NEXT_PUBLIC_API || 'http://127.0.0.1:8787'
 
 export async function api(path, { method = 'GET', body, asText = false } = {}) {
   const response = await fetch(`${API_BASE}${path}`, {

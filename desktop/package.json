@@ -1,0 +1,13 @@
+{
+  "name": "namco-account-manager-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Vỏ Electron cho UI Next.js của NAMCO Account Manager",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "33.4.11"
+  }
+}

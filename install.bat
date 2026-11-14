@@ -73,6 +73,20 @@ if errorlevel 1 (
     pushd "%~dp0web"
     call npm.cmd install --no-fund --no-audit
     popd
+
+    echo [INFO] Dang cai Electron cho ung dung desktop (desktop/)...
+    pushd "%~dp0desktop"
+    call npm.cmd install --no-fund --no-audit
+    if not exist "node_modules\electron\dist\electron.exe" (
+        echo [INFO] Tai binary Electron (npm co the chan postinstall)...
+        node node_modules\electron\install.js
+    )
+    popd
+
+    echo [INFO] Build giao dien tinh (web/out)...
+    pushd "%~dp0web"
+    call npm.cmd run build
+    popd
 )
 
 

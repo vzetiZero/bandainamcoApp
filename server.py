@@ -22,12 +22,18 @@ def _force_utf8():
 
 def main():
     _force_utf8()
-    parser = argparse.ArgumentParser(description="API backend (FastAPI) cho UI web")
+    parser = argparse.ArgumentParser(description="API backend (FastAPI) cho UI web/Electron")
     parser.add_argument("--host", default=os.environ.get("API_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("API_PORT", "8787")))
     parser.add_argument("--reload", action="store_true", help="Tự nạp lại khi sửa code")
     parser.add_argument("--no-browser", action="store_true",
                         help="Không tự mở trình duyệt tới http://localhost:3000")
+    parser.add_argument("--kill-port", dest="kill_port", action="store_true", default=True,
+                        help="Tự kill tiến trình cũ đang giữ cổng (mặc định bật)")
+    parser.add_argument("--no-kill-port", dest="kill_port", action="store_false",
+                        help="Không kill; báo lỗi nếu cổng đang bận")
+    parser.add_argument("--pick-port", action="store_true",
+                        help="Nếu kill xong vẫn bận thì tự nhảy sang cổng trống kế tiếp")
     args = parser.parse_args()
 
     try:
@@ -36,7 +42,23 @@ def main():
         print("Thiếu FastAPI/uvicorn. Chạy: python -m pip install -r requirements.txt")
         return 1
 
-    if not args.no_browser:
+    from tools import port_tools
+
+    if args.kill_port:
+        if args.pick_port:
+            port = port_tools.pick_port(args.port, args.host)
+        elif port_tools.free_port(args.port, args.host):
+            port = args.port
+        else:
+            print("Cổng %d vẫn bị chiếm. Dùng --pick-port hoặc đổi --port." % args.port)
+            return 1
+    else:
+        if not port_tools.can_bind(args.port, args.host):
+            print("Cổng %d đang bị chiếm (--no-kill-port)." % args.port)
+            return 1
+        port = args.port
+
+    if not args.no_browser and not os.environ.get("ELECTRON_RUN_AS_NODE"):
         try:
             import webbrowser
 
@@ -44,13 +66,13 @@ def main():
         except Exception:  # noqa: BLE001 - mở browser là tiện ích, không bắt buộc
             pass
 
-    print("API: http://%s:%d  (docs: /docs)" % (args.host, args.port))
+    print("API: http://%s:%d  (docs: /docs)" % (args.host, port))
     if args.reload:
-        uvicorn.run("api.app:app", host=args.host, port=args.port, reload=True)
+        uvicorn.run("api.app:app", host=args.host, port=port, reload=True)
     else:
         from api.app import create_app
 
-        uvicorn.run(create_app(), host=args.host, port=args.port, log_level="info")
+        uvicorn.run(create_app(), host=args.host, port=port, log_level="info")
     return 0
 
 

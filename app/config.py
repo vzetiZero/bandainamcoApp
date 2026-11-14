@@ -79,7 +79,8 @@ CHECKOUT_FILE = os.path.join(APP_ROOT, "checkout_profile.json")
 WEB_SETTINGS_FILE = os.path.join(APP_ROOT, "web_settings.json")
 API_HOST = os.environ.get("API_HOST", "127.0.0.1")
 API_PORT = int(os.environ.get("API_PORT", "8787"))
-# Cho phép origin của Next.js dev server gọi API.
+# Cho phép origin của Next.js dev server và của Electron (protocol app:// → Origin
+# "app://local", còn file:// gửi "null").
 API_CORS_ORIGINS = os.environ.get(
     "API_CORS_ORIGINS",
-    "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    "http://localhost:3000,http://127.0.0.1:3000,app://local,null").split(",")

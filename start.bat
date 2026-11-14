@@ -1,58 +1,31 @@
 @echo off
-title NAMCO Account Manager - Start
-color 0A
+chcp 65001 >nul
+title NAMCO Account Manager
+cd /d "%~dp0"
 
 echo ==========================================
-echo    NAMCO Account Manager - Khoi dong
+echo    NAMCO Account Manager - khoi dong
 echo ==========================================
 echo.
 
-:: Kiem tra Python da cai dat chua
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo [LOI] Chua cai dat Python!
-    echo Vui long cai dat Python tu https://www.python.org/downloads/
-    echo Nho tick vao "Add Python to PATH" khi cai dat.
+    echo [LOI] Chua cai Python. Tai tai https://www.python.org/downloads/
+    echo       Nho tick "Add Python to PATH".
     pause
     exit /b 1
 )
 
-echo [OK] Da tim thay Python:
-python --version
-echo.
-
-:: Kiem tra va cai dat thu vien neu can
-echo [INFO] Kiem tra thu vien can thiet...
-python -c "import requests" >nul 2>&1
+where node >nul 2>&1
 if errorlevel 1 (
-    echo [INFO] Dang cai dat requests...
-    pip install requests
-)
-
-python -c "import PySide6" >nul 2>&1
-if errorlevel 1 (
-    echo [INFO] Dang cai dat PySide6...
-    pip install PySide6
-)
-
-python -c "import playwright" >nul 2>&1
-if errorlevel 1 (
-    echo [CANH BAO] Thieu Playwright - phan chay bang Chrome se khong dung duoc.
-    echo           Cai bang: python -m pip install playwright
-)
-
-
-echo [OK] Tat ca thu vien da san sang!
-echo.
-
-:: Chay ung dung
-echo [INFO] Dang khoi dong ung dung...
-echo.
-python account_manager.py
-
-if errorlevel 1 (
-    echo.
-    echo [LOI] Ung dung da gap loi!
+    echo [LOI] Chua cai Node.js. Tai tai https://nodejs.org/ ^(LTS^)
     pause
+    exit /b 1
 )
 
+:: Mot lenh duy nhat: cai thieu, build UI neu can, giai phong cong, mo API + Electron
+python start.py %*
+
+echo.
+echo [INFO] Ung dung da dong.
+pause

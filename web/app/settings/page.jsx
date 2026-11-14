@@ -58,6 +58,12 @@ export default function SettingsPage() {
     }
   }
 
+  // Nạp sẵn nội dung recipe để ô soạn thảo không trống khi mở trang.
+  useEffect(() => {
+    if (!recipeText) loadRecipe()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const saveRecipe = async () => {
     try {
       await put('/api/browser/recipe', { json: recipeText })
@@ -258,8 +264,11 @@ export default function SettingsPage() {
       {/* Recipe editor */}
       <Panel
         sx={{ mt: 3 }}
-        title="Recipe (JSON)"
-        subtitle="Selector nằm trong dữ liệu, không hard-code. Sửa rồi bấm Lưu — API validate trước khi ghi."
+        title="Recipe (JSON) — công thức thao tác trên trang chiến dịch"
+        subtitle={
+          'Dữ liệu, không phải code: login → mở link → dismiss popup → select 種類 → カートに入れる → cart_seisan → pause. '
+          + 'Sửa selector ở đây khi site đổi layout; API validate trước khi ghi.'
+        }
         actions={<Button variant="secondary" onClick={saveRecipe}>Lưu recipe</Button>}
       >
         <Box sx={{ p: 3 }}>
