@@ -38,7 +38,8 @@ export default function CampaignsPage() {
   const [groupFilter, setGroupFilter] = useState('')
   // Ngày nhận hàng (slot) chọn bằng ô ngày + khung giờ; chế độ "ngẫu nhiên" thì mỗi
   // tài khoản nhận một khung giờ khác nhau (chia đều) thay vì cả loạt cùng một giờ.
-  const [slotMode, setSlotMode] = useState('fixed')
+  // Mặc định NGẪU NHIÊN: mỗi tài khoản một khung giờ, tránh cả loạt cùng một giờ.
+  const [slotMode, setSlotMode] = useState('random')
   const [slotDate, setSlotDate] = useState('')
   const [slotTime, setSlotTime] = useState('11:00')
   const [slotTimes, setSlotTimes] = useState(SLOT_TIMES)
