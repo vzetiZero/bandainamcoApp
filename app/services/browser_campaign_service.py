@@ -193,12 +193,14 @@ class BrowserCampaignService:
         return results
 
     def _record(self, campaign, result, log):
-        """Ghi nhận tài khoản đã đăng ký — chỉ khi trang xác nhận thành công."""
+        """Ghi nhận tài khoản đã đăng ký (hoặc đã mua trước đó)."""
         if result.status not in SUCCESS_STATUSES or self.campaign_service is None:
             return
-        if self.campaign_service.mark(campaign, result.email):
-            log("Ghi nhận %s đã đăng ký '%s'"
-                % (result.email, campaign.get("name") or "(chưa đặt tên)"))
+        note = "đã mua trước đó" if result.status == "already" else ""
+        if self.campaign_service.mark(campaign, result.email, note=note):
+            log("Ghi nhận %s %s '%s'"
+                % (result.email, "đã mua trước đó ở" if note else "đã đăng ký",
+                   campaign.get("name") or "(chưa đặt tên)"))
 
     # ---------------- cửa sổ để mở cho người dùng ----------------
     def _keep_open(self, email, session):

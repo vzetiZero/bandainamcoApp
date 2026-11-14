@@ -32,6 +32,7 @@ class CampaignService:
         self.campaigns = self._dedupe(self.store.load())
         signups = self.signup_store.get_json(SIGNUPS_KEY, "{}")
         self.signups = signups if isinstance(signups, dict) else {}
+        self._migrate_signup_keys()
 
     def reload_if_changed(self) -> bool:
         """Nạp lại khi `campaigns.json` bị sửa từ ngoài (git pull, sửa tay)."""
@@ -60,8 +61,26 @@ class CampaignService:
 
     @staticmethod
     def key(campaign: dict) -> str:
-        """Khoá ổn định của chiến dịch, không đổi khi thứ tự dòng thay đổi."""
-        return CAMPAIGN_KEY % (campaign.get("name", ""), campaign.get("url", ""))
+        """Khoá ổn định của chiến dịch: dùng LINK để đổi tên không mất ghi nhận."""
+        url = str(campaign.get("url") or "").strip().lower()
+        if url:
+            return url
+        return str(campaign.get("name") or "").strip().lower()
+
+    def _migrate_signup_keys(self):
+        """Chuyển ghi nhận của khoá cũ `tên|link` sang khoá link (giữ nguyên dữ liệu)."""
+        changed = False
+        for campaign in self.campaigns:
+            new_key = self.key(campaign)
+            if not new_key or new_key in self.signups:
+                continue
+            legacy = CAMPAIGN_KEY % (campaign.get("name", ""), campaign.get("url", ""))
+            entries = self.signups.pop(legacy, None)
+            if entries:
+                self.signups[new_key] = entries
+                changed = True
+        if changed:
+            self.save_signups()
 
     @staticmethod
     def is_valid(campaign: dict) -> bool:
@@ -101,13 +120,19 @@ class CampaignService:
     def is_registered(self, campaign: dict, email: str) -> bool:
         return any(entry.get("email") == email for entry in self.signups_for(campaign))
 
-    def mark(self, campaign: dict, email: str) -> bool:
-        """Ghi nhận một tài khoản cho chiến dịch; False khi đã ghi nhận rồi."""
+    def mark(self, campaign: dict, email: str, note: str = "") -> bool:
+        """Ghi nhận một tài khoản cho chiến dịch; False khi đã ghi nhận rồi.
+
+        `note` để phân biệt "đăng ký mới" với "đã mua trước đó" trong danh sách.
+        """
         if self.is_registered(campaign, email):
             return False
         entries = self.signups.setdefault(self.key(campaign), [])
-        entries.append({"email": email,
-                        "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+        entry = {"email": email,
+                 "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        if note:
+            entry["note"] = note
+        entries.append(entry)
         self.save_signups()
         return True
 

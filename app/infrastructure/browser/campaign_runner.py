@@ -54,6 +54,9 @@ SITE_ERROR_MESSAGES = {
 }
 # Giỏ đã có sản phẩm: site không cho thêm nữa. Không phải lỗi — đi thẳng trang giỏ.
 CART_FULL_HINTS = ("カート内の商品数とカートに入れる商品数の合計が 1 以下",)
+# Site báo tài khoản đã mua/đăng ký trước đó (1 suất/người, tính cả lịch sử đơn) —
+# không phải lỗi: đánh dấu `already` và ghi nhận luôn, không chờ timeout.
+ALREADY_HINTS = ("点まで購入可能", "購入履歴も含め")
 # Ô chứa câu lỗi cụ thể của site (vd serial code sai/đã dùng): đọc trước khi dò chữ.
 SITE_ERROR_SELECTORS = ("#ITEM_SERIAL_CHECK_MODAL_ERROR_MESSAGE",)
 
@@ -89,6 +92,10 @@ class _SiteError(Exception):
 
 class _CartAlreadyFull(Exception):
     """Giỏ đã có sản phẩm (site báo không thêm được): đi thẳng trang giỏ và chạy tiếp."""
+
+
+class _AlreadyPurchased(Exception):
+    """Site báo tài khoản đã mua trước đó: coi như đã đăng ký, ghi nhận rồi bỏ qua."""
 
 
 def _artifacts_dir(email):
@@ -195,6 +202,15 @@ class CampaignBrowserRunner:
         except _SiteError as exc:
             result.status, result.message = STATUS_ERROR, str(exc)
             result.screenshot = session.screenshot(_screenshot_path(email, "site-error"))
+            self.on_log("[%s] %s" % (email, result.message))
+        except _AlreadyPurchased:
+            # Đã mua trước đó (1 suất/người, tính cả lịch sử đơn): không phải lỗi —
+            # tính là `already` để được ghi nhận vào danh sách đã đăng ký.
+            result.status = STATUS_ALREADY
+            result.ok = True
+            result.message = ("Tài khoản đã mua trước đó (site báo 1 suất/người, "
+                              "tính cả lịch sử đơn)")
+            result.screenshot = session.screenshot(_screenshot_path(email, "already-purchased"))
             self.on_log("[%s] %s" % (email, result.message))
         except Exception as exc:  # noqa: BLE001 - một tài khoản lỗi không được giết cả mẻ
             result.status = STATUS_ERROR
@@ -519,6 +535,9 @@ class CampaignBrowserRunner:
             if message:
                 raise _SiteError("Site báo: 「%s」" % message)
         text = session.page_text()
+        for hint in ALREADY_HINTS:
+            if hint in text:
+                raise _AlreadyPurchased(hint)
         for hint in CART_FULL_HINTS:
             if hint in text:
                 raise _CartAlreadyFull(hint)

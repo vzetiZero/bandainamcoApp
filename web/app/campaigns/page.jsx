@@ -44,6 +44,29 @@ function exportName(prefix, campaignName) {
   return `${prefix}-${name}-${stamp}`
 }
 
+// ---- ghi nhớ lựa chọn của panel chạy (localStorage, theo máy/tài khoản Windows) ----
+const RUN_SETTINGS_KEY = 'campaign-run-settings'
+const SLOT_CODES_KEY = 'campaign-slot-codes'
+
+function readStore(key, fallback) {
+  if (typeof window === 'undefined') return fallback
+  try {
+    const raw = window.localStorage.getItem(key)
+    return raw ? JSON.parse(raw) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function writeStore(key, value) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    /* localStorage bị chặn thì bỏ qua, không ảnh hưởng chạy */
+  }
+}
+
 // Ô chọn ngày/giờ của trình duyệt dùng dạng "YYYY-MM-DDTHH:MM", còn API lưu
 // "YYYY-MM-DD HH:MM" — đổi qua lại ở đây để form luôn hiện đúng giá trị đã lưu.
 const toInputTime = (text) => {
@@ -81,6 +104,8 @@ export default function CampaignsPage() {
   const [loadingOptions, setLoadingOptions] = useState(false)
   // Mã 種類 dán tay (mỗi dòng một mã) khi không đọc được trang.
   const [slotCodesText, setSlotCodesText] = useState('')
+  // Đã khôi phục tuỳ chọn đã lưu chưa (chỉ lưu sau khi khôi phục để không ghi đè).
+  const [restored, setRestored] = useState(false)
   // Mặc định BẬT: chạy là chốt đơn thật. Tắt khi chỉ muốn điền form rồi tự kiểm tra.
   const [submitEnabled, setSubmitEnabled] = useState(true)
   const [useAccountAddress, setUseAccountAddress] = useState(true)
@@ -193,8 +218,8 @@ export default function CampaignsPage() {
   }
 
   const exportSignups = (format) => {
-    const headers = ['email', 'thoi_diem']
-    const rows = signups.map((signup) => [signup.email || '', signup.at || ''])
+    const headers = ['email', 'thoi_diem', 'ghi_chu']
+    const rows = signups.map((signup) => [signup.email || '', signup.at || '', signup.note || ''])
     const name = exportName('da-dang-ky', current?.name)
     if (format === 'csv') {
       downloadFile(`${name}.csv`, '\ufeff' + toCsv(rows, headers), 'text/csv;charset=utf-8')
@@ -287,10 +312,12 @@ export default function CampaignsPage() {
 
   // Mã hàng của chiến dịch 熊本店 (159016) — danh sách thật của trang lấy ở "Tải lại".
   const slotItem = SLOT_ITEM
+  // Chỉ phụ thuộc URL (chuỗi) để không đọc lại trang mỗi lần poll danh sách chiến dịch.
+  const currentUrl = current?.url || ''
 
   // Đọc danh sách 種類 thật của trang (ngày/giờ + mã) mỗi khi đổi chiến dịch.
   const loadSlotOptions = useCallback(async () => {
-    if (!current?.url) {
+    if (!currentUrl) {
       setSiteOptions([])
       setPickedCodes([])
       return
@@ -298,10 +325,15 @@ export default function CampaignsPage() {
     setLoadingOptions(true)
     setSlotOptionsError('')
     try {
-      const data = await get(`/api/campaigns/slot-options?url=${encodeURIComponent(current.url)}`)
+      const data = await get(`/api/campaigns/slot-options?url=${encodeURIComponent(currentUrl)}`)
       const items = data.items || []
       setSiteOptions(items)
-      setPickedCodes(items.map((item) => item.value))   // mặc định chọn hết
+      // Khôi phục các ngày/giờ đã tick của chính chiến dịch này (lưu theo URL); mã nào
+      // trang không còn thì bỏ, chưa từng tick thì mặc định chọn hết.
+      const saved = readStore(SLOT_CODES_KEY, {})[currentUrl]
+      const values = new Set(items.map((item) => item.value))
+      const restored = Array.isArray(saved) ? saved.filter((code) => values.has(code)) : []
+      setPickedCodes(restored.length ? restored : items.map((item) => item.value))
       if (!items.length) setSlotOptionsError('Trang không có mã 種類 nào')
     } catch (err) {
       setSiteOptions([])
@@ -310,9 +342,53 @@ export default function CampaignsPage() {
     } finally {
       setLoadingOptions(false)
     }
-  }, [current])
+  }, [currentUrl])
 
   useEffect(() => { loadSlotOptions() }, [loadSlotOptions])
+
+  // Khôi phục tuỳ chọn lần trước: đổi tab / mở lại app không phải chỉnh lại.
+  useEffect(() => {
+    const stored = readStore(RUN_SETTINGS_KEY, {})
+    if (stored.slotMode) setSlotMode(stored.slotMode)
+    if (stored.slotTime) setSlotTime(stored.slotTime)
+    if (typeof stored.slotDate === 'string') setSlotDate(stored.slotDate)
+    if (typeof stored.slotCode === 'string') setSlotCode(stored.slotCode)
+    if (typeof stored.slotCodesText === 'string') setSlotCodesText(stored.slotCodesText)
+    if (typeof stored.submitEnabled === 'boolean') setSubmitEnabled(stored.submitEnabled)
+    if (typeof stored.useAccountAddress === 'boolean') setUseAccountAddress(stored.useAccountAddress)
+    if (typeof stored.clearCart === 'boolean') setClearCart(stored.clearCart)
+    if (typeof stored.useProxy === 'boolean') setUseProxy(stored.useProxy)
+    if (typeof stored.groupFilter === 'string') setGroupFilter(stored.groupFilter)
+    setRestored(true)
+  }, [])
+
+  useEffect(() => {
+    if (!restored) return
+    writeStore(RUN_SETTINGS_KEY, {
+      slotMode, slotTime, slotDate, slotCode, slotCodesText,
+      submitEnabled, useAccountAddress, clearCart, useProxy, groupFilter,
+      selectedUrl: currentUrl,
+    })
+  }, [restored, slotMode, slotTime, slotDate, slotCode, slotCodesText,
+      submitEnabled, useAccountAddress, clearCart, useProxy, groupFilter, currentUrl])
+
+  // Mở lại tab: chọn lại đúng chiến dịch lần trước để ngày/giờ đã tick hiện ngay.
+  useEffect(() => {
+    if (!restored || selectedRow !== null || !items.length) return
+    const stored = readStore(RUN_SETTINGS_KEY, {})
+    if (!stored.selectedUrl) return
+    const index = items.findIndex((item) => item.url === stored.selectedUrl)
+    if (index >= 0) loadSignups(index)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restored, items, selectedRow])
+
+  // Ngày/giờ đã tick: lưu riêng cho từng chiến dịch (theo URL).
+  useEffect(() => {
+    if (!restored || !currentUrl) return
+    const storedCodes = readStore(SLOT_CODES_KEY, {})
+    storedCodes[currentUrl] = pickedCodes
+    writeStore(SLOT_CODES_KEY, storedCodes)
+  }, [restored, currentUrl, pickedCodes])
 
   const pastedCodes = useMemo(
     () => slotCodesText.split(/[\s,]+/).map((code) => code.trim()).filter(Boolean),
@@ -513,7 +589,14 @@ export default function CampaignsPage() {
               key={signup.email}
               sx={{ px: 3, py: 2, borderBottom: '1px solid', borderColor: 'border', gap: 2, alignItems: 'center' }}
             >
-              <Text sx={{ flex: 1, fontSize: 1 }}>{signup.email}</Text>
+              <Text sx={{ flex: 1, fontSize: 1 }}>
+                {signup.email}
+                {signup.note && (
+                  <Text as="span" sx={{ ml: 2, fontSize: 0, color: 'warn' }}>
+                    {signup.note}
+                  </Text>
+                )}
+              </Text>
               <Text sx={{ fontSize: 0, color: 'muted' }}>{signup.at}</Text>
               <Button
                 variant="ghost"
