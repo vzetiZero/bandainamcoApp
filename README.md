@@ -71,6 +71,9 @@ change_name.py                CLI: rename a profile
 
 `GET /api/health`, `/api/accounts`, `/api/campaigns`, `/api/settings`, `/api/proxy`,
 `/api/checkout`, `/api/logs?after=<seq>`, `/api/jobs[/{id}]`, `/api/browser/sessions`.
+`POST /api/proxy/text` writes a pasted proxy list straight into the proxy file in use
+(`replace: false` appends and skips duplicates; malformed lines are reported with credentials
+masked) and reloads the proxy manager.
 Long tasks (`/api/accounts/check`, `/api/browser/run`, `/api/proxy/check`, `/api/browser/discover`)
 return a job id; the UI polls `/api/jobs/{id}`. Docs at `/docs`.
 

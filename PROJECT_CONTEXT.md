@@ -42,6 +42,9 @@ Electron window (web/out) ──HTTP/JSON──> api/ (FastAPI) ──> app/serv
 ## 3. Chiến dịch
 
 - Mỗi chiến dịch: `name`, `url`, `opens_at`, `closes_at` (`YYYY-MM-DD HH:MM`), `notes`.
+  UI dùng ô chọn ngày/giờ (`input[type=datetime-local]`, có lịch), không nhập text tự do;
+  API + store chuẩn hoá mọi giá trị về `YYYY-MM-DD HH:MM` (`normalize_campaign_time`,
+  nhận cả dạng `YYYY-MM-DDTHH:MM`), giá trị lạ giữ nguyên để người dùng thấy mà sửa.
   Trạng thái (`Đang mở` / `Chưa mở` / `Đã đóng` / `Chưa rõ`) **tính từ thời gian**, không nhập tay.
 - **Nơi lưu (cố ý tách 2 kho)** — `app/infrastructure/campaign_store.py`:
   - danh sách chiến dịch → `campaigns.json` ở gốc dự án, **git track**: copy thư mục hoặc
@@ -134,6 +137,9 @@ Khi chạy nhiều tài khoản: `use_account_address` lấy địa chỉ từ h
 
 `GET /api/health`, `/api/accounts`, `/api/campaigns`, `/api/settings`, `/api/proxy`,
 `/api/checkout`, `/api/logs?after=<seq>`, `/api/jobs[/{id}]`, `/api/browser/sessions`.
+`POST /api/proxy/text` ghi danh sách proxy dán từ ô text trong tab Cấu hình vào đúng file
+proxy đang dùng (`replace=false` = thêm vào cuối, bỏ dòng trùng; lỗi định dạng được báo lại
+với user/pass đã che) rồi nạp lại `proxy_manager`.
 Tác vụ dài (`/api/accounts/check`, `/api/browser/run`, `/api/proxy/check`,
 `/api/browser/discover`) trả `{id, status:"running", ...}`; UI poll job tới khi xong.
 API **không** trả mật khẩu, số thẻ hay CVV. CORS cho `http://localhost:3000` và `app://local`.

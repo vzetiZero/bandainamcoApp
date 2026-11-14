@@ -1,5 +1,13 @@
 {
   "version": 1,
-  "updated_at": "",
-  "campaigns": []
+  "updated_at": "2026-11-14 15:48:28",
+  "campaigns": [
+    {
+      "name": "ECCL00000062_20261121_1127_016",
+      "url": "https://parks2.bandainamco-am.co.jp/item/ECCL00000062_20261121_1127_016.html",
+      "opens_at": "2026-11-11 15:48",
+      "closes_at": "2026-11-20 15:48",
+      "notes": ""
+    }
+  ]
 }

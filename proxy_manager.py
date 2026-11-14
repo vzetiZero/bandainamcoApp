@@ -169,6 +169,69 @@ def parse_proxy(line):
     }, None
 
 
+def mask_proxy_line(line):
+    """Che tài khoản/mật khẩu khi báo lỗi: giữ host:port, phần sau thay bằng ***."""
+    raw = (line or "").strip()
+    parts = raw.split(":")
+    if len(parts) >= 3:
+        return ":".join(parts[:2] + ["***"] * (len(parts) - 2))
+    return raw
+
+
+def save_proxy_text(path, text, replace=False):
+    """Ghi danh sách proxy người dùng dán vào file proxy (`proxy.txt`).
+
+    - Chỉ ghi dòng đọc được bằng `parse_proxy`; dòng sai định dạng không ghi mà
+      báo lại (đã che user/pass) để người dùng sửa.
+    - Dòng trùng `host:port:tài khoản` với proxy đã có thì bỏ qua, không nhân đôi.
+    - `replace=True`: file chỉ còn đúng các dòng vừa nhập; mặc định là thêm vào
+      cuối file đang có (giữ nguyên chú thích/dòng trống cũ).
+
+    Trả về dict: `added`, `duplicate`, `invalid` [(số dòng, dòng đã che, lý do)],
+    `count` (số proxy trong file sau khi ghi), `path`.
+    """
+    existing = []
+    if not replace and os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8-sig") as handle:
+                existing = [line.rstrip("\r\n") for line in handle.readlines()]
+        except OSError:
+            existing = []
+
+    seen = set()
+    for line in existing:
+        proxy, _error = parse_proxy(line)
+        if proxy is not None:
+            seen.add((proxy["host"], proxy["port"], proxy["username"]))
+
+    added, invalid, duplicate = [], [], 0
+    for number, line in enumerate((text or "").splitlines(), 1):
+        proxy, error = parse_proxy(line)
+        if proxy is None:
+            if error is not None:
+                invalid.append((number, mask_proxy_line(line), error))
+            continue
+        key = (proxy["host"], proxy["port"], proxy["username"])
+        if key in seen:
+            duplicate += 1
+            continue
+        seen.add(key)
+        added.append(line.strip())
+
+    lines = list(added) if replace else existing + added
+    if added or replace:
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("\n".join(lines) + ("\n" if lines else ""))
+        except OSError as exc:
+            raise OSError("Không ghi được %s: %s" % (path, exc)) from exc
+
+    count = sum(1 for line in lines if parse_proxy(line)[0] is not None)
+    return {"added": len(added), "duplicate": duplicate, "invalid": invalid,
+            "count": count, "path": path, "replaced": bool(replace)}
+
+
 def proxy_url(proxy):
     """Xây URL dạng scheme://user:pass@ip:port để requests sử dụng."""
     auth = ""

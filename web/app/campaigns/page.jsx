@@ -8,6 +8,14 @@ import { useJob, usePoll } from '@/lib/hooks'
 
 const BLANK = { name: '', url: '', opens_at: '', closes_at: '', notes: '' }
 
+// Ô chọn ngày/giờ của trình duyệt dùng dạng "YYYY-MM-DDTHH:MM", còn API lưu
+// "YYYY-MM-DD HH:MM" — đổi qua lại ở đây để form luôn hiện đúng giá trị đã lưu.
+const toInputTime = (text) => {
+  const raw = String(text || '').trim().replace(' ', 'T')
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(raw) ? raw.slice(0, 16) : ''
+}
+const fromInputTime = (value) => String(value || '').replace('T', ' ')
+
 export default function CampaignsPage() {
   const campaigns = usePoll('/api/campaigns', 15000)
   const accounts = usePoll('/api/accounts', 20000)
@@ -43,11 +51,16 @@ export default function CampaignsPage() {
   }
 
   const saveCampaign = async () => {
+    const payload = {
+      ...form,
+      opens_at: fromInputTime(form.opens_at),
+      closes_at: fromInputTime(form.closes_at),
+    }
     try {
       if (editingRow === null) {
-        await post('/api/campaigns', form)
+        await post('/api/campaigns', payload)
       } else {
-        await put(`/api/campaigns/${editingRow}`, form)
+        await put(`/api/campaigns/${editingRow}`, payload)
       }
       setForm(BLANK)
       setEditingRow(null)
@@ -64,8 +77,8 @@ export default function CampaignsPage() {
     setForm({
       name: campaign.name || '',
       url: campaign.url || '',
-      opens_at: campaign.opens_at || '',
-      closes_at: campaign.closes_at || '',
+      opens_at: toInputTime(campaign.opens_at),
+      closes_at: toInputTime(campaign.closes_at),
       notes: campaign.notes || '',
     })
   }
@@ -246,15 +259,17 @@ export default function CampaignsPage() {
               />
               <TextField
                 label="Mở đăng ký"
+                type="datetime-local"
                 value={form.opens_at}
                 onChange={(event) => setForm({ ...form, opens_at: event.target.value })}
-                placeholder="2026-11-11 10:00"
+                hint="Bấm vào ô để chọn ngày và giờ. Để trống nếu chưa biết."
               />
               <TextField
                 label="Đóng đăng ký"
+                type="datetime-local"
                 value={form.closes_at}
                 onChange={(event) => setForm({ ...form, closes_at: event.target.value })}
-                placeholder="2026-11-15 23:59"
+                hint="Giờ đóng tính cả phút — 23:59 là hết ngày."
               />
               <TextField
                 label="Ghi chú"

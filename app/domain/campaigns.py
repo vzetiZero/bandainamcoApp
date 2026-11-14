@@ -2,7 +2,16 @@
 from datetime import datetime, timedelta
 
 
-CAMPAIGN_TIME_FORMATS = ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d")
+CAMPAIGN_TIME_FORMATS = (
+    "%Y-%m-%d %H:%M",      # dạng lưu chuẩn
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M",      # ô date/time của trình duyệt (input datetime-local)
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d",
+)
+# Dạng lưu trong campaigns.json / trả ra UI; ô date/time gửi lên sẽ được đổi về đây
+# để file dùng chung luôn cùng một định dạng (diff git sạch, so sánh chuỗi được).
+CAMPAIGN_TIME_STORAGE = "%Y-%m-%d %H:%M"
 CAMPAIGN_STATUS_UNDETERMINED = "Chưa rõ"
 CAMPAIGN_STATUS_NOT_STARTED = "Chưa mở"
 CAMPAIGN_STATUS_OPEN = "Đang mở"
@@ -27,6 +36,20 @@ def parse_campaign_time(text):
         except ValueError:
             continue
     return None
+
+
+def normalize_campaign_time(text):
+    """Chuẩn hoá mốc thời gian của chiến dịch về `CAMPAIGN_TIME_STORAGE`.
+
+    Ô chọn ngày/giờ của UI gửi `2026-11-21T11:00`; file dùng chung chỉ nên có một
+    dạng duy nhất (`2026-11-21 11:00`). Giá trị không đọc được thì giữ nguyên chữ
+    người dùng nhập để họ thấy mà sửa (trạng thái sẽ là `Chưa rõ`).
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    parsed = parse_campaign_time(raw)
+    return parsed.strftime(CAMPAIGN_TIME_STORAGE) if parsed else raw
 
 
 def campaign_status(campaign, now=None):

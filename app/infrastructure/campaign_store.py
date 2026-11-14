@@ -30,6 +30,7 @@ import threading
 from datetime import datetime
 
 from app.config import CAMPAIGNS_FILE
+from app.domain.campaigns import normalize_campaign_time
 
 FORMAT_VERSION = 1
 # Trường của một chiến dịch; trường lạ do người dùng tự thêm trong file vẫn được
@@ -44,6 +45,10 @@ def normalize_campaigns(items):
         if not isinstance(raw, dict):
             continue
         campaign = {field: str(raw.get(field) or "").strip() for field in CAMPAIGN_FIELDS}
+        # Ô chọn ngày/giờ của UI gửi "YYYY-MM-DDTHH:MM"; file chung chỉ giữ một dạng
+        # duy nhất để diff git sạch và so sánh chuỗi được.
+        campaign["opens_at"] = normalize_campaign_time(campaign["opens_at"])
+        campaign["closes_at"] = normalize_campaign_time(campaign["closes_at"])
         if not campaign["name"] and not campaign["url"]:
             continue
         for key, value in raw.items():

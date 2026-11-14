@@ -17,7 +17,9 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from app.config import API_CORS_ORIGINS, MAX_BROWSER_PARALLEL, MAX_CONCURRENCY
 from app.domain import checkout as checkout_domain
 from app.domain.browser_recipe import RecipeNotReady, load_recipe, validate_recipe
-from app.domain.campaigns import CAMPAIGN_STATUS_CLOSED, CAMPAIGN_STATUS_OPEN
+from app.domain.campaigns import (
+    CAMPAIGN_STATUS_CLOSED, CAMPAIGN_STATUS_OPEN, normalize_campaign_time,
+)
 from api.state import ApiState, default_state
 
 
@@ -197,8 +199,8 @@ def create_app(state: Optional[ApiState] = None) -> FastAPI:
         campaign = {
             "name": (payload.get("name") or "").strip(),
             "url": (payload.get("url") or "").strip(),
-            "opens_at": (payload.get("opens_at") or "").strip(),
-            "closes_at": (payload.get("closes_at") or "").strip(),
+            "opens_at": normalize_campaign_time(payload.get("opens_at")),
+            "closes_at": normalize_campaign_time(payload.get("closes_at")),
             "notes": (payload.get("notes") or "").strip(),
         }
         if not current.campaigns.is_valid(campaign):
@@ -213,8 +215,8 @@ def create_app(state: Optional[ApiState] = None) -> FastAPI:
         campaign = {
             "name": (payload.get("name") or "").strip(),
             "url": (payload.get("url") or "").strip(),
-            "opens_at": (payload.get("opens_at") or "").strip(),
-            "closes_at": (payload.get("closes_at") or "").strip(),
+            "opens_at": normalize_campaign_time(payload.get("opens_at")),
+            "closes_at": normalize_campaign_time(payload.get("closes_at")),
             "notes": (payload.get("notes") or "").strip(),
         }
         if not current.campaigns.is_valid(campaign):
@@ -326,6 +328,36 @@ def create_app(state: Optional[ApiState] = None) -> FastAPI:
         current = st()
         current.apply_proxy_settings()
         return current.proxy_settings()
+
+    @api.post("/api/proxy/text")
+    def proxy_save_text(payload: dict = Body(...)):
+        """Nhập danh sách proxy bằng ô text -> ghi thẳng vào file proxy đang dùng.
+
+        `replace=false` (mặc định) là thêm vào cuối file, bỏ dòng trùng;
+        `replace=true` ghi lại toàn bộ file bằng đúng các dòng vừa nhập.
+        """
+        from proxy_manager import proxy_manager, save_proxy_text
+
+        current = st()
+        text = payload.get("text") or ""
+        replace = bool(payload.get("replace", False))
+        if not text.strip() and not replace:
+            raise HTTPException(400, "Chưa có dòng proxy nào để thêm")
+        try:
+            result = save_proxy_text(proxy_manager.path, text, replace=replace)
+        except OSError as exc:
+            raise HTTPException(500, str(exc)) from exc
+        # Nạp lại ngay để danh sách trong UI và mọi request sau dùng proxy mới.
+        current.apply_proxy_settings()
+        name = os.path.basename(result["path"])
+        if replace:
+            current.log("Proxy: ghi lại %s — %d proxy" % (name, result["count"]), "warn")
+        elif result["added"]:
+            current.log("Proxy: thêm %d dòng vào %s (tổng %d)"
+                        % (result["added"], name, result["count"]), "ok")
+        if result["invalid"]:
+            current.log("Proxy: bỏ %d dòng sai định dạng" % len(result["invalid"]), "warn")
+        return result
 
     @api.post("/api/proxy/check")
     def proxy_check():

@@ -13,6 +13,8 @@ export default function SettingsPage() {
   const { job, track } = useJob(() => proxy.reload())
 
   const [proxyForm, setProxyForm] = useState({ enabled: false, mode: 'per_request', file: '' })
+  const [proxyText, setProxyText] = useState('')
+  const [proxyReplace, setProxyReplace] = useState(false)
   const [browserForm, setBrowserForm] = useState({ recipe_path: '', headless: false, parallel: 1, submit: true })
   const [general, setGeneral] = useState(1)
   const [recipeText, setRecipeText] = useState('')
@@ -95,6 +97,24 @@ export default function SettingsPage() {
   const checkProxies = async () => {
     const started = await post('/api/proxy/check')
     track(started)
+  }
+
+  // Dán danh sách proxy vào ô text -> ghi thẳng vào file proxy (proxy.txt).
+  const saveProxyText = async () => {
+    try {
+      const result = await post('/api/proxy/text', { text: proxyText, replace: proxyReplace })
+      proxy.reload()
+      setProxyText('')
+      setProxyReplace(false)
+      const parts = [`đã thêm ${result.added}`, `bỏ qua ${result.duplicate} trùng`]
+      if (result.invalid?.length) {
+        const [row, , reason] = result.invalid[0]
+        parts.push(`${result.invalid.length} dòng lỗi (dòng ${row}: ${reason})`)
+      }
+      setMessage(`${parts.join(', ')} · file có ${result.count} proxy`)
+    } catch (err) {
+      setMessage(err.message)
+    }
   }
 
   const saveBrowser = async () => {
@@ -195,6 +215,36 @@ export default function SettingsPage() {
                 </Flex>
               ))}
               {!proxy.data?.items?.length && <Empty>Chưa có proxy nào.</Empty>}
+            </Box>
+
+            {/* Nhập danh sách bằng tay: ghi thẳng vào file proxy đang dùng. */}
+            <Box sx={{ mt: 3, pt: 3, borderTop: '1px solid', borderColor: 'border' }}>
+              <Field
+                label="Dán danh sách proxy"
+                hint="Mỗi dòng một proxy: ip:port:username:password (hoặc ip:port). Lưu là ghi ngay vào file proxy ở trên."
+              >
+                <Box
+                  as="textarea"
+                  rows={5}
+                  value={proxyText}
+                  onChange={(event) => setProxyText(event.target.value)}
+                  placeholder={'1.2.3.4:8080:user:pass\n5.6.7.8:8080:user:pass'}
+                  sx={{
+                    width: '100%', fontFamily: 'mono', fontSize: 1, p: 2,
+                    border: '1px solid', borderColor: 'border', borderRadius: 'small',
+                    bg: 'surface', color: 'text', resize: 'vertical',
+                  }}
+                />
+              </Field>
+              <CheckField
+                label="Thay thế toàn bộ file"
+                checked={proxyReplace}
+                onChange={(event) => setProxyReplace(event.target.checked)}
+                hint="TẮT = thêm vào cuối danh sách đang có (bỏ dòng trùng). BẬT = file chỉ còn đúng các dòng vừa dán."
+              />
+              <Button onClick={saveProxyText} disabled={!proxyText.trim() && !proxyReplace}>
+                Lưu vào file proxy
+              </Button>
             </Box>
           </Box>
         </Panel>
