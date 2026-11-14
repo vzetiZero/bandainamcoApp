@@ -3,6 +3,7 @@
 Một tiến trình API giữ đúng một `ApiState`; mọi router lấy từ đây. Nghiệp vụ vẫn
 gọi service/domain trong `app/` — không có logic mới ở tầng này.
 """
+import os
 import threading
 import uuid
 from collections import deque
@@ -12,7 +13,7 @@ from datetime import datetime
 from typing import Any, Callable, Optional
 
 from app.config import (
-    BROWSER_ARTIFACTS_DIR, BROWSER_RECIPE_FILE, CHECKOUT_FILE, DATA_FILE,
+    BROWSER_ARTIFACTS_DIR, BROWSER_RECIPE_FILE, CAMPAIGNS_FILE, CHECKOUT_FILE, DATA_FILE,
     DEFAULT_BROWSER_PARALLEL, DEFAULT_CONCURRENCY, MAX_BROWSER_PARALLEL,
     MAX_CONCURRENCY, SETTINGS_FILE, WEB_SETTINGS_FILE,
 )
@@ -23,6 +24,7 @@ from app.infrastructure.bandai_name import BandaiNameClient
 from app.infrastructure.browser.browser_session import find_chrome
 from app.infrastructure.browser.campaign_runner import navigate_only
 from app.infrastructure.browser.discovery import discover_page
+from app.infrastructure.campaign_store import CampaignStore, migrate_legacy_campaigns
 from app.infrastructure.checkout_store import CheckoutStore
 from app.infrastructure.file_settings import FileSettingsStore
 from app.services.account_service import AccountService
@@ -163,17 +165,25 @@ class ApiState:
     """Wiring một lần cho cả tiến trình API."""
 
     def __init__(self, data_file=DATA_FILE, settings_file=WEB_SETTINGS_FILE,
-                 recipe_path=BROWSER_RECIPE_FILE, checkout_file=CHECKOUT_FILE):
+                 recipe_path=BROWSER_RECIPE_FILE, checkout_file=CHECKOUT_FILE,
+                 campaigns_file=CAMPAIGNS_FILE):
         self.logs = LogBuffer()
         self.jobs = JobRegistry(self.logs)
-        # `web_settings.json` là nơi lưu của bản web; lần đầu chép từ INI của bản
-        # desktop để danh sách chiến dịch/tuỳ chọn không bị mất.
+        # `web_settings.json` là cấu hình của TỪNG MÁY (proxy, worker, recipe);
+        # lần đầu chép từ INI của bản desktop để không mất tuỳ chọn cũ.
         self.settings = FileSettingsStore(settings_file, legacy_ini=SETTINGS_FILE)
         self.repository = AccountRepository(path=data_file, on_change=self.log)
         self.accounts = AccountService(self.repository)
         self.accounts.load()
-        self.campaigns = CampaignService(self.settings)
+        # Chiến dịch: danh sách ở `campaigns.json` (file chung, git track) còn ghi
+        # nhận đăng ký ở `web_settings.json` của máy này — xem campaign_store.py.
+        self.campaigns = CampaignService(CampaignStore(campaigns_file),
+                                         signup_store=self.settings)
+        migrated = migrate_legacy_campaigns(self.campaigns.store, self.settings)
         self.campaigns.load()
+        if migrated:
+            self.log("Đã chuyển %d chiến dịch sang %s (file dùng chung, git track)"
+                     % (migrated, os.path.basename(campaigns_file)), "ok")
         self.auth = BandaiAuthClient()
         self.names = BandaiNameClient(auth_client=self.auth)
         self.checkout = CheckoutStore(path=checkout_file, on_log=self.log)
@@ -227,6 +237,11 @@ class ApiState:
         return view
 
     def campaigns_view(self):
+        # File chung có thể bị sửa từ ngoài (git pull, sửa tay): nạp lại khi đổi.
+        if self.campaigns.reload_if_changed():
+            self.log("Đã nạp lại %d chiến dịch từ %s"
+                     % (len(self.campaigns.campaigns),
+                        os.path.basename(self.campaigns.store.path)))
         return [self.campaign_view(campaign, row)
                 for row, campaign in enumerate(self.campaigns.campaigns)]
 
@@ -499,6 +514,7 @@ def default_state() -> ApiState:
         data_file=_os.environ.get("ACCOUNTS_FILE", DATA_FILE),
         settings_file=_os.environ.get("SETTINGS_FILE", WEB_SETTINGS_FILE),
         recipe_path=_os.environ.get("RECIPE_FILE", BROWSER_RECIPE_FILE),
+        campaigns_file=_os.environ.get("CAMPAIGNS_FILE", CAMPAIGNS_FILE),
     )
 
 

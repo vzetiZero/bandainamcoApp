@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from 'react'
 import { Badge, Box, Button, Flex, Input, Select, Text } from 'theme-ui'
-import { Empty, Panel, Progress, StatusBadge, Toolbar, TextField, SelectField } from '@/components/ui'
+import { Empty, Panel, Progress, ScrollTable, StatusBadge, Toolbar, TextField, SelectField } from '@/components/ui'
 import { del, post } from '@/lib/api'
 import { useJob, usePoll } from '@/lib/hooks'
 
@@ -145,8 +145,7 @@ export default function AccountsPage() {
             </Button>
           </Toolbar>
 
-          <Box sx={{ overflowX: 'auto' }}>
-            <table>
+          <ScrollTable maxHeight="min(62vh, 560px)">
               <thead>
                 <tr>
                   <th style={{ width: 36 }} />
@@ -193,8 +192,7 @@ export default function AccountsPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
-          </Box>
+          </ScrollTable>
           {items.length === 0 && <Empty>Không có tài khoản nào khớp bộ lọc.</Empty>}
         </Panel>
 

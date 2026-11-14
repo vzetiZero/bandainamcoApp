@@ -13,11 +13,8 @@ python browser_campaign.py --check
 python browser_campaign.py --run --campaign "Tên chiến dịch" --email a@b.c --password secret
 python browser_campaign.py --all --campaign "Tên chiến dịch" --submit
 ```
-
-Mặc định **không** bấm gửi; thêm `--submit` mới bấm nút gửi cuối cùng. Mọi thứ
-khác (đăng nhập, điền form, phân loại kết quả, ảnh chụp) nằm trong
-`app/infrastructure/browser/` và `app/services/browser_campaign_service.py`.
 """
+
 import argparse
 import io
 import sys
@@ -25,11 +22,12 @@ import time
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-from app.config import BROWSER_RECIPE_FILE, SETTINGS_FILE, WEB_SETTINGS_FILE
+from app.config import BROWSER_RECIPE_FILE, CAMPAIGNS_FILE, SETTINGS_FILE, WEB_SETTINGS_FILE
 from app.infrastructure.account_repository import AccountRepository
 from app.infrastructure.browser.browser_session import find_chrome
 from app.infrastructure.browser.campaign_runner import navigate_only
 from app.infrastructure.browser.discovery import discover_page
+from app.infrastructure.campaign_store import CampaignStore
 from app.infrastructure.file_settings import FileSettingsStore
 from app.services.browser_campaign_service import BrowserCampaignService
 from app.services.campaign_service import CampaignService
@@ -40,8 +38,9 @@ def log(message):
 
 
 def load_campaigns():
+    """Chiến dịch đọc từ `campaigns.json` (file chung, git track) — giống API."""
     store = FileSettingsStore(WEB_SETTINGS_FILE, legacy_ini=SETTINGS_FILE)
-    service = CampaignService(store)
+    service = CampaignService(CampaignStore(CAMPAIGNS_FILE), signup_store=store)
     service.load()
     return service, service.campaigns
 

@@ -21,6 +21,7 @@ Electron window (web/out) ──HTTP/JSON──> api/ (FastAPI) ──> app/serv
 | `web/` | UI Next.js 14 (App Router) + theme-ui; build tĩnh ra `web/out` |
 | `desktop/` | vỏ Electron: nạp `web/out` qua protocol `app://`, truyền `API_BASE` |
 | `recipes/*.json` | công thức thao tác trình duyệt (dữ liệu, không phải code) |
+| `campaigns.json` | danh sách chiến dịch **dùng chung**, git track (xem §3) |
 | `server.py` | chạy API (`--kill-port` mặc định: cổng bận thì kill tiến trình cũ) |
 | `start.py` / `start.bat` | khởi động tất cả: cài thiếu → build UI → giải phóng cổng → API → Electron |
 | `tools/port_tools.py` | kiểm tra/giải phóng cổng TCP (`netstat`+`taskkill`, POSIX `lsof`) |
@@ -42,7 +43,16 @@ Electron window (web/out) ──HTTP/JSON──> api/ (FastAPI) ──> app/serv
 
 - Mỗi chiến dịch: `name`, `url`, `opens_at`, `closes_at` (`YYYY-MM-DD HH:MM`), `notes`.
   Trạng thái (`Đang mở` / `Chưa mở` / `Đã đóng` / `Chưa rõ`) **tính từ thời gian**, không nhập tay.
-- Ghi nhận đăng ký theo khoá `"tên|link"` → `{campaign_key: [{email, at}]}`.
+- **Nơi lưu (cố ý tách 2 kho)** — `app/infrastructure/campaign_store.py`:
+  - danh sách chiến dịch → `campaigns.json` ở gốc dự án, **git track**: copy thư mục hoặc
+    `git pull` sang máy khác là có nguyên danh sách; API tự nạp lại khi file đổi
+    (`CampaignService.reload_if_changed`, kiểm tra mtime) nên `git pull` ăn ngay cả khi app
+    đang chạy. Đổi chỗ bằng biến môi trường `CAMPAIGNS_FILE`.
+  - ghi nhận đăng ký → `web_settings.json` của **từng máy** (email gắn với bộ tài khoản riêng
+    của máy đó). Lần chạy đầu tự chuyển danh sách cũ trong `web_settings.json` sang
+    `campaigns.json` (cờ `campaigns_migrated`, chỉ một lần).
+- Ghi nhận đăng ký theo khoá `"tên|link"` → `{campaign_key: [{email, at}]}`; dòng trùng khoá
+  trong file chung (do gộp/git pull) được gộp khi nạp, giữ dòng sau.
 - Trạng thái chạy: `registered`, `already`, `closed`, `paused`, `dry_run`, `unverified`,
   `login_failed`, `ip_blocked`, `error`, `skipped`; chỉ `registered`/`already` được ghi nhận.
 
@@ -133,7 +143,8 @@ API **không** trả mật khẩu, số thẻ hay CVV. CORS cho `http://localhos
 | File | Nội dung | Git |
 |---|---|---|
 | `accounts_data.json` | danh sách tài khoản (email, password, trạng thái, hồ sơ) | ignored |
-| `web_settings.json` | tuỳ chọn UI/API (campaigns, proxy, browser, max_workers) | ignored |
+| `web_settings.json` | tuỳ chọn UI/API **của từng máy** (proxy, browser, max_workers, ghi nhận đăng ký) | ignored |
+| `campaigns.json` | danh sách chiến dịch — dùng chung mọi máy (copy thư mục / `git pull`) | tracked |
 | `ui_settings.ini` | tuỳ chọn bản desktop cũ — chỉ dùng để chép sang lần đầu | ignored |
 | `proxy.txt` | `ip:port:username:password` | ignored |
 | `checkout_profile.json` | hồ sơ đặt hàng/thẻ (DPAPI) | ignored |

@@ -189,7 +189,7 @@ def create_app(state: Optional[ApiState] = None) -> FastAPI:
             items = [item for item in items
                      if needle in (item.get("name") or "").lower()
                      or needle in (item.get("url") or "").lower()]
-        return {"items": items}
+        return {"items": items, "file": current.campaigns.store.path}
 
     @api.post("/api/campaigns")
     def campaign_add(payload: dict = Body(...)):

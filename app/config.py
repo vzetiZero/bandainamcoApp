@@ -22,6 +22,12 @@ ACCOUNT_COOKIE_DOMAIN = ".bandainamcoid.com"
 APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ICONS_DIR = os.path.join(APP_ROOT, "icons")
 DATA_FILE = "accounts_data.json"
+# Danh sách chiến dịch 抽選: file RIÊNG và **được git track** (khác tài khoản,
+# proxy, hồ sơ thẻ) để chuyển app sang máy khác — copy thư mục hoặc `git pull` —
+# vẫn giữ nguyên chiến dịch. Ghi nhận đăng ký (email) vẫn ở `web_settings.json`
+# của từng máy vì nó gắn với bộ tài khoản riêng của máy đó.
+CAMPAIGNS_FILE = os.environ.get("CAMPAIGNS_FILE",
+                                os.path.join(APP_ROOT, "campaigns.json"))
 # Cấu hình giao diện/proxy lưu cạnh app (INI) để copy thư mục dự án sang máy
 # khác vẫn giữ nguyên; lần đầu chạy sẽ chuyển giá trị cũ từ registry sang.
 SETTINGS_FILE = os.path.join(APP_ROOT, "ui_settings.ini")

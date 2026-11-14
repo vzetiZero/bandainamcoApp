@@ -104,11 +104,18 @@ changes.
 | File | Content | Git |
 |---|---|---|
 | `accounts_data.json` | accounts (email, password, status, profile) | ignored |
-| `web_settings.json` | UI/API settings (campaigns, proxy, browser, workers) | ignored |
+| `web_settings.json` | per-machine UI/API settings (proxy, browser, workers, campaign sign-ups) | ignored |
+| `campaigns.json` | campaign list, shared by every device (copy the folder or `git pull`) | tracked |
 | `proxy.txt` | `ip:port:username:password` | ignored |
 | `checkout_profile.json` | order/payment profile, DPAPI-encrypted | ignored |
 | `recipes/*.json` | browser recipes | tracked |
 | `browser_profiles/`, `browser_artifacts/` | Chrome profiles, screenshots and dumps | ignored |
+
+Campaigns live in `campaigns.json` on purpose: accounts, proxies and the card profile stay
+per-machine, but the campaign list travels with the project. The API re-reads the file when it
+changes, so a `git pull` on a running app is picked up on the next poll. Sign-ups (which accounts
+registered) stay in `web_settings.json` because they refer to that machine's accounts. Override the
+location with `CAMPAIGNS_FILE`.
 
 ## Notes
 

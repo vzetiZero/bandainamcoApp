@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import { Badge, Box, Button, Flex, Input, Select, Text } from 'theme-ui'
-import { Empty, Panel, Progress, StatusBadge, TextField, CheckField } from '@/components/ui'
+import { Empty, Panel, Progress, ScrollTable, StatusBadge, TextField, CheckField } from '@/components/ui'
 import { del, get, post, put } from '@/lib/api'
 import { useJob, usePoll } from '@/lib/hooks'
 
@@ -145,7 +145,7 @@ export default function CampaignsPage() {
         <Box sx={{ flex: 1 }}>
           <Text as="h1" sx={{ fontSize: 6, fontWeight: 'bold' }}>Chiến dịch</Text>
           <Text sx={{ color: 'muted', fontSize: 2 }}>
-            {items.length} chiến dịch · recipe: {settings.data?.browser?.recipe_path?.split(/[\\/]/).pop() || '—'}
+            {items.length} chiến dịch · {campaigns.data?.file?.split(/[\\/]/).pop() || 'campaigns.json'} · recipe: {settings.data?.browser?.recipe_path?.split(/[\\/]/).pop() || '—'}
           </Text>
         </Box>
         <Flex sx={{ gap: 2 }}>
@@ -183,8 +183,7 @@ export default function CampaignsPage() {
       <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2.1fr) minmax(0, 1fr)', gap: 3 }}>
         <Box>
           <Panel title="Danh sách chiến dịch" subtitle="Bấm một dòng để chọn và xem đăng ký">
-            <Box sx={{ overflowX: 'auto' }}>
-              <table>
+            <ScrollTable maxHeight="min(46vh, 420px)">
                 <thead>
                   <tr>
                     <th>Tên</th>
@@ -226,8 +225,7 @@ export default function CampaignsPage() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
-            </Box>
+            </ScrollTable>
             {items.length === 0 && <Empty>Chưa có chiến dịch nào.</Empty>}
           </Panel>
 

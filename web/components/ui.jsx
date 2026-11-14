@@ -120,6 +120,32 @@ export function Empty({ children }) {
   )
 }
 
+// ScrollTable: bảng danh sách có thanh cuộn dọc riêng để danh sách dài không
+// đẩy cả trang dài ra (phanh cuộn của trang vẫn giữ nguyên vị trí panel).
+// `thead` dính lại khi cuộn để vẫn biết cột nào là cột nào; chiều rộng vượt
+// khung thì cuộn ngang trong cùng khung đó.
+export function ScrollTable({ children, maxHeight = 440, sx }) {
+  return (
+    <Box
+      sx={{
+        maxHeight,
+        overflowY: 'auto',
+        overflowX: 'auto',
+        overscrollBehavior: 'contain',
+        '& thead th': {
+          position: 'sticky',
+          top: 0,
+          zIndex: 2,
+          bg: 'surface',
+        },
+        ...sx,
+      }}
+    >
+      <table>{children}</table>
+    </Box>
+  )
+}
+
 export function Toolbar({ children, sx }) {
   return (
     <Flex sx={{ gap: 2, alignItems: 'center', flexWrap: 'wrap', p: 3, ...sx }}>

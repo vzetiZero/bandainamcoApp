@@ -1,31 +1,62 @@
-"""Nghiệp vụ chiến dịch 抽選: danh sách chiến dịch và ghi nhận tài khoản đã đăng ký."""
+"""Nghiệp vụ chiến dịch 抽選: danh sách dùng chung, ghi nhận đăng ký theo từng máy.
+
+Hai kho dữ liệu, cố ý tách nhau:
+
+- `store`       -> `campaigns.json` ở gốc dự án, **được git track**: chuyển app sang
+  máy khác là có nguyên danh sách chiến dịch, không phải nhập lại.
+- `signup_store` -> `web_settings.json` của từng máy: ghi nhận đăng ký gắn với email
+  tài khoản, mà mỗi máy giữ một bộ tài khoản khác nhau (nên không chia sẻ).
+
+Trạng thái chiến dịch không lưu ở đây — suy ra từ thời gian (`app/domain/campaigns`).
+"""
 from datetime import datetime
 from typing import List, Optional
 from urllib.parse import urlparse
 
 CAMPAIGN_KEY = "%s|%s"
+SIGNUPS_KEY = "campaign_signups"
 
 
 class CampaignService:
-    """Lưu chiến dịch trong QSettings qua SettingsStore; UI chỉ hiển thị."""
+    """Lưu chiến dịch trong `campaigns.json` (chung) và signups trong settings (máy)."""
 
-    def __init__(self, settings):
-        self.settings = settings
+    def __init__(self, campaign_store, signup_store=None):
+        self.store = campaign_store
+        # Không truyền `signup_store` thì dùng chung một store (một file duy nhất).
+        self.signup_store = signup_store if signup_store is not None else campaign_store
         self.campaigns: List[dict] = []
         self.signups: dict = {}
 
+    # ---------------- nạp/ghi ----------------
     def load(self):
-        campaigns = self.settings.get_json("campaigns", "[]")
-        self.campaigns = campaigns if isinstance(campaigns, list) else []
-        signups = self.settings.get_json("campaign_signups", "{}")
+        self.campaigns = self._dedupe(self.store.load())
+        signups = self.signup_store.get_json(SIGNUPS_KEY, "{}")
         self.signups = signups if isinstance(signups, dict) else {}
 
+    def reload_if_changed(self) -> bool:
+        """Nạp lại khi `campaigns.json` bị sửa từ ngoài (git pull, sửa tay)."""
+        check = getattr(self.store, "changed", None)
+        if check is None or not check():
+            return False
+        self.load()
+        return True
+
     def save(self):
-        self.settings.set_json("campaigns", self.campaigns)
+        self.store.save(self.campaigns)
         self.prune_orphan_signups()
 
     def save_signups(self):
-        self.settings.set_json("campaign_signups", self.signups)
+        self.signup_store.set_json(SIGNUPS_KEY, self.signups)
+
+    def _dedupe(self, campaigns) -> List[dict]:
+        """Bỏ dòng trùng khoá (do gộp file khi git pull); giữ dòng xuất hiện sau."""
+        last = {}
+        for index, campaign in enumerate(campaigns):
+            last[self.key(campaign)] = index
+        if len(last) == len(campaigns):
+            return list(campaigns)
+        return [campaign for index, campaign in enumerate(campaigns)
+                if last[self.key(campaign)] == index]
 
     @staticmethod
     def key(campaign: dict) -> str:
