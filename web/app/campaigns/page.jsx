@@ -128,20 +128,31 @@ export default function CampaignsPage() {
     )
   }
 
+  // Danh sách tài khoản sẽ chạy: tick tay thì đúng các tài khoản đó, không tick thì
+  // cả danh sách đang xem theo bộ lọc nhóm (bỏ tài khoản đang lỗi).
+  const runTargets = useMemo(() => {
+    if (runEmails.length) return runEmails
+    return visibleAccounts
+      .filter((account) => account.status !== 'Không hoạt động')
+      .map((account) => account.email)
+  }, [runEmails, visibleAccounts])
+
+  const missingDate = slotMode === 'random' && !slotDate
+  const missingTimes = slotMode === 'random' && slotTimes.length === 0
+  const canRun = Boolean(current) && runTargets.length > 0 && !missingDate && !missingTimes
+
   const startRun = async () => {
     if (!current) {
-      setMessage('Chọn một chiến dịch trong bảng trước')
+      setMessage('Bấm một dòng trong "Danh sách chiến dịch" để chọn chiến dịch trước')
       return
     }
-    if (slotMode === 'random' && (!slotDate || slotTimes.length === 0)) {
-      setMessage('Chế độ ngẫu nhiên cần ngày nhận và ít nhất một khung giờ')
+    if (missingDate || missingTimes) {
+      setMessage(missingDate
+        ? 'Chế độ ngẫu nhiên: chọn "Ngày nhận hàng" (hoặc đổi sang "Giờ cố định")'
+        : 'Chế độ ngẫu nhiên: tick ít nhất một khung giờ')
       return
     }
-    const targets = runEmails.length
-      ? runEmails
-      : visibleAccounts
-          .filter((account) => account.status !== 'Không hoạt động')
-          .map((account) => account.email)
+    const targets = runTargets
     if (!targets.length) {
       setMessage('Không có tài khoản nào để chạy')
       return
@@ -193,7 +204,11 @@ export default function CampaignsPage() {
         </Box>
         <Flex sx={{ gap: 2 }}>
           <Button variant="secondary" as="a" href="/api/health" target="_blank">Kiểm tra API</Button>
-          <Button onClick={startRun} disabled={running || !current}>
+          <Button
+            onClick={startRun}
+            disabled={running || !canRun}
+            title={canRun ? 'Mở Chrome cho từng tài khoản đã chọn' : 'Chọn chiến dịch, tài khoản và ngày nhận trước'}
+          >
             {running ? 'Đang chạy…' : 'Chạy bằng Chrome'}
           </Button>
         </Flex>
@@ -332,7 +347,7 @@ export default function CampaignsPage() {
         </Box>
 
         <Box>
-          <Panel title="Chạy tự động" subtitle={current ? current.name : 'Chọn một chiến dịch'}>
+          <Panel title="Chạy tự động" subtitle={current ? current.name : 'Bấm một dòng trong "Danh sách chiến dịch" để chọn'}>
             <Box sx={{ p: 3 }}>
               <Text sx={{ display: 'block', fontSize: 1, color: 'muted', mb: 1 }}>
                 Ngày nhận hàng
@@ -487,9 +502,29 @@ export default function CampaignsPage() {
                   <Text sx={{ fontSize: 1, color: 'muted' }}>Nhóm này chưa có tài khoản.</Text>
                 )}
               </Box>
-              <Button sx={{ mt: 3, width: '100%' }} onClick={startRun} disabled={running || !current}>
-                {running ? 'Đang chạy…' : 'Chạy bằng Chrome'}
-              </Button>
+              {missingDate && (
+                <Text sx={{ display: 'block', fontSize: 1, color: 'error', mb: 1 }}>
+                  Chọn "Ngày nhận hàng" ở trên, hoặc đổi chế độ sang "Giờ cố định".
+                </Text>
+              )}
+              {missingTimes && (
+                <Text sx={{ display: 'block', fontSize: 1, color: 'error', mb: 1 }}>
+                  Tick ít nhất một khung giờ được phép.
+                </Text>
+              )}
+              <Box sx={{ mt: 3, pt: 3, borderTop: '1px solid', borderColor: 'border' }}>
+                <Text sx={{ display: 'block', fontSize: 1, color: 'muted', mb: 2 }}>
+                  Sẽ chạy {runTargets.length} tài khoản cho{' '}
+                  <strong>{current ? current.name : '— chưa chọn chiến dịch —'}</strong>
+                  {slotMode === 'random'
+                    ? ` · ngày ${slotDate || '?'} · giờ ngẫu nhiên trong ${slotTimes.length} khung`
+                    : ` · ${slotValue ? `giờ ${slotValue.split('_').slice(1, 3).join(' ')}` : 'giờ theo recipe'}`}
+                  {submitEnabled ? ' · chốt đơn thật' : ' · chỉ điền, không gửi'}
+                </Text>
+                <Button sx={{ width: '100%' }} onClick={startRun} disabled={running || !canRun}>
+                  {running ? 'Đang chạy…' : `Chạy bằng Chrome (${runTargets.length})`}
+                </Button>
+              </Box>
             </Box>
           </Panel>
 
