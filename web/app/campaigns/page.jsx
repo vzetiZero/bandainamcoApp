@@ -360,6 +360,144 @@ export default function CampaignsPage() {
     sessions.reload()
   }
 
+  // Danh sách tài khoản chưa chạy: nằm dưới bảng chiến dịch cho dễ kiểm soát.
+  const accountListPanel = (
+    <Panel
+      sx={{ mt: 3 }}
+      title="Tài khoản chưa chạy"
+      subtitle={current
+        ? `${openAccounts.length} sẵn sàng · ${doneCount} đã đăng ký`
+        : 'Chọn một chiến dịch ở trên'}
+    >
+      <Box sx={{ p: 3 }}>
+      <Flex sx={{ gap: 2, alignItems: 'center', mb: 1 }}>
+        <Text sx={{ flex: 1, fontSize: 1, color: 'muted' }}>
+          {runEmails.length
+            ? `Đã chọn ${runEmails.length} tài khoản`
+            : `Mặc định chạy tất cả ${openAccounts.length} tài khoản bên dưới`}
+        </Text>
+        <Select
+          value={groupFilter}
+          onChange={(event) => { setGroupFilter(event.target.value); setRunEmails([]) }}
+          sx={{ maxWidth: 150, fontSize: 1, py: 1 }}
+          title="Chỉ hiện tài khoản của một nhóm"
+        >
+          <option value="">Tất cả nhóm</option>
+          <option value={NO_GROUP}>Chưa vào nhóm</option>
+          {groupNames.map((name) => (
+            <option key={name} value={name}>{name}</option>
+          ))}
+        </Select>
+        <Button
+          variant="ghost"
+          sx={{ fontSize: 1 }}
+          onClick={() => setRunEmails(openAccounts.map((account) => account.email))}
+        >
+          Chọn cả nhóm
+        </Button>
+      </Flex>
+      <Text sx={{ display: 'block', fontSize: 0, color: 'muted', mb: 2 }}>
+        Tổng {visibleAccounts.length} tài khoản · đã đăng ký {doneCount} · chưa chạy{' '}
+        {openAccounts.length}
+        {doneCount > 0 ? ' (đã ẩn khỏi danh sách, xem tab "Đã đăng ký")' : ''}
+      </Text>
+      <Box sx={{ maxHeight: 'min(52vh, 460px)', overflowY: 'auto', border: '1px solid', borderColor: 'border', borderRadius: 'small', p: 2 }}>
+        {openAccounts.map((account) => (
+          <label
+            key={account.email}
+            style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', fontSize: 12 }}
+          >
+            <input
+              type="checkbox"
+              checked={runEmails.includes(account.email)}
+              onChange={() => toggleRun(account.email)}
+            />
+            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {account.email}
+            </span>
+            {account.group && (
+              <span style={{ fontSize: 10, color: '#8a94a6' }}>{account.group}</span>
+            )}
+          </label>
+        ))}
+        {openAccounts.length === 0 && (
+          <Text sx={{ fontSize: 1, color: 'muted' }}>
+            {doneCount > 0
+              ? 'Mọi tài khoản trong nhóm này đã đăng ký chiến dịch rồi.'
+              : 'Nhóm này chưa có tài khoản.'}
+          </Text>
+        )}
+      </Box>
+      {needsCodes && (
+        <Text sx={{ display: 'block', fontSize: 1, color: 'error', mb: 1 }}>
+          Tick ít nhất một ngày/giờ ở danh sách trên (bấm &quot;Tải lại&quot; nếu trống).
+        </Text>
+      )}
+      </Box>
+    </Panel>
+  )
+
+  const registeredListPanel = (
+  <Panel
+    sx={{ mt: 3 }}
+    title="Đã đăng ký"
+    subtitle={current ? `${signups.length} tài khoản đã đăng ký` : 'Chọn chiến dịch'}
+    actions={
+      <Flex sx={{ gap: 2 }}>
+        <Button
+          variant="ghost"
+          sx={{ fontSize: 1, px: 2, py: 1 }}
+          onClick={() => exportSignups('txt')}
+          disabled={!signups.length}
+          title="Tải danh sách đã đăng ký (.txt)"
+        >
+          TXT
+        </Button>
+        <Button
+          variant="ghost"
+          sx={{ fontSize: 1, px: 2, py: 1 }}
+          onClick={() => exportSignups('csv')}
+          disabled={!signups.length}
+          title="Tải danh sách đã đăng ký (.csv)"
+        >
+          CSV
+        </Button>
+        {sessions.data?.items?.length ? (
+          <Button variant="secondary" onClick={closeSessions} sx={{ fontSize: 1, px: 2, py: 1 }}>
+            Đóng {sessions.data.items.length} cửa sổ
+          </Button>
+        ) : null}
+      </Flex>
+    }
+  >
+    {signups.length > 0 ? (
+      <Box sx={{ maxHeight: 240, overflowY: 'auto' }}>
+        {[...signups]
+          .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))
+          .map((signup) => (
+            <Flex
+              key={signup.email}
+              sx={{ px: 3, py: 2, borderBottom: '1px solid', borderColor: 'border', gap: 2, alignItems: 'center' }}
+            >
+              <Text sx={{ flex: 1, fontSize: 1 }}>{signup.email}</Text>
+              <Text sx={{ fontSize: 0, color: 'muted' }}>{signup.at}</Text>
+              <Button
+                variant="ghost"
+                sx={{ fontSize: 0, px: 1, py: 0 }}
+                title="Bỏ ghi nhận: tài khoản quay lại danh sách chưa chạy"
+                onClick={() => removeSignup(signup.email)}
+              >
+                Bỏ
+              </Button>
+            </Flex>
+          ))}
+      </Box>
+    ) : (
+      <Empty>Chưa có ai được ghi nhận.</Empty>
+    )}
+  </Panel>
+  )
+
   return (
     <Box>
       <Flex sx={{ alignItems: 'flex-end', mb: 4, gap: 3, flexWrap: 'wrap' }}>
@@ -573,6 +711,8 @@ export default function CampaignsPage() {
             </Box>
           </Panel>
           )}
+          {accountListPanel}
+          {registeredListPanel}
         </Box>
 
         <Box>
@@ -749,69 +889,6 @@ export default function CampaignsPage() {
                 onChange={(event) => setSubmitEnabled(event.target.checked)}
                 hint="Mặc định BẬT: app bấm 入力内容を確認する → 注文する, đơn 抽選 được gửi thật và không huỷ được. TẮT nếu chỉ muốn dừng ở trang ご注文情報入力 để tự kiểm tra."
               />
-              <Flex sx={{ gap: 2, alignItems: 'center', mb: 1 }}>
-                <Text sx={{ flex: 1, fontSize: 1, color: 'muted' }}>
-                  Tài khoản chưa chạy ({runEmails.length
-                    ? `${runEmails.length} chọn`
-                    : `${openAccounts.length} sẵn sàng`})
-                </Text>
-                <Select
-                  value={groupFilter}
-                  onChange={(event) => { setGroupFilter(event.target.value); setRunEmails([]) }}
-                  sx={{ maxWidth: 150, fontSize: 1, py: 1 }}
-                  title="Chỉ hiện tài khoản của một nhóm"
-                >
-                  <option value="">Tất cả nhóm</option>
-                  <option value={NO_GROUP}>Chưa vào nhóm</option>
-                  {groupNames.map((name) => (
-                    <option key={name} value={name}>{name}</option>
-                  ))}
-                </Select>
-                <Button
-                  variant="ghost"
-                  sx={{ fontSize: 1 }}
-                  onClick={() => setRunEmails(openAccounts.map((account) => account.email))}
-                >
-                  Chọn cả nhóm
-                </Button>
-              </Flex>
-              <Text sx={{ display: 'block', fontSize: 0, color: 'muted', mb: 2 }}>
-                Tổng {visibleAccounts.length} tài khoản · đã đăng ký {doneCount} · chưa chạy{' '}
-                {openAccounts.length}
-                {doneCount > 0 ? ' (đã ẩn khỏi danh sách, xem tab "Đã đăng ký")' : ''}
-              </Text>
-              <Box sx={{ maxHeight: 220, overflowY: 'auto', border: '1px solid', borderColor: 'border', borderRadius: 'small', p: 2 }}>
-                {openAccounts.map((account) => (
-                  <label
-                    key={account.email}
-                    style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', fontSize: 12 }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={runEmails.includes(account.email)}
-                      onChange={() => toggleRun(account.email)}
-                    />
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {account.email}
-                    </span>
-                    {account.group && (
-                      <span style={{ fontSize: 10, color: '#8a94a6' }}>{account.group}</span>
-                    )}
-                  </label>
-                ))}
-                {openAccounts.length === 0 && (
-                  <Text sx={{ fontSize: 1, color: 'muted' }}>
-                    {doneCount > 0
-                      ? 'Mọi tài khoản trong nhóm này đã đăng ký chiến dịch rồi.'
-                      : 'Nhóm này chưa có tài khoản.'}
-                  </Text>
-                )}
-              </Box>
-              {needsCodes && (
-                <Text sx={{ display: 'block', fontSize: 1, color: 'error', mb: 1 }}>
-                  Tick ít nhất một ngày/giờ ở danh sách trên (bấm &quot;Tải lại&quot; nếu trống).
-                </Text>
-              )}
               <Box sx={{ mt: 3, pt: 3, borderTop: '1px solid', borderColor: 'border' }}>
                 <Text sx={{ display: 'block', fontSize: 1, color: 'muted', mb: 2 }}>
                   Sẽ chạy {runTargets.length} tài khoản cho{' '}
@@ -828,64 +905,6 @@ export default function CampaignsPage() {
             </Box>
           </Panel>
 
-          <Panel
-            sx={{ mt: 3 }}
-            title="Đã đăng ký"
-            subtitle={current ? `${signups.length} tài khoản đã đăng ký` : 'Chọn chiến dịch'}
-            actions={
-              <Flex sx={{ gap: 2 }}>
-                <Button
-                  variant="ghost"
-                  sx={{ fontSize: 1, px: 2, py: 1 }}
-                  onClick={() => exportSignups('txt')}
-                  disabled={!signups.length}
-                  title="Tải danh sách đã đăng ký (.txt)"
-                >
-                  TXT
-                </Button>
-                <Button
-                  variant="ghost"
-                  sx={{ fontSize: 1, px: 2, py: 1 }}
-                  onClick={() => exportSignups('csv')}
-                  disabled={!signups.length}
-                  title="Tải danh sách đã đăng ký (.csv)"
-                >
-                  CSV
-                </Button>
-                {sessions.data?.items?.length ? (
-                  <Button variant="secondary" onClick={closeSessions} sx={{ fontSize: 1, px: 2, py: 1 }}>
-                    Đóng {sessions.data.items.length} cửa sổ
-                  </Button>
-                ) : null}
-              </Flex>
-            }
-          >
-            {signups.length > 0 ? (
-              <Box sx={{ maxHeight: 240, overflowY: 'auto' }}>
-                {[...signups]
-                  .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))
-                  .map((signup) => (
-                    <Flex
-                      key={signup.email}
-                      sx={{ px: 3, py: 2, borderBottom: '1px solid', borderColor: 'border', gap: 2, alignItems: 'center' }}
-                    >
-                      <Text sx={{ flex: 1, fontSize: 1 }}>{signup.email}</Text>
-                      <Text sx={{ fontSize: 0, color: 'muted' }}>{signup.at}</Text>
-                      <Button
-                        variant="ghost"
-                        sx={{ fontSize: 0, px: 1, py: 0 }}
-                        title="Bỏ ghi nhận: tài khoản quay lại danh sách chưa chạy"
-                        onClick={() => removeSignup(signup.email)}
-                      >
-                        Bỏ
-                      </Button>
-                    </Flex>
-                  ))}
-              </Box>
-            ) : (
-              <Empty>Chưa có ai được ghi nhận.</Empty>
-            )}
-          </Panel>
         </Box>
       </Box>
     </Box>
