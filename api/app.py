@@ -89,12 +89,14 @@ def create_app(state: Optional[ApiState] = None) -> FastAPI:
     # TÀI KHOẢN
     # ========================================================
     @api.get("/api/accounts")
-    def accounts_list(query: str = "", status: str = ""):
+    def accounts_list(query: str = "", status: str = "", group: str = ""):
         current = st()
         items = [current.account_public(account)
-                 for account in current.accounts.visible(query, status)]
+                 for account in current.accounts.visible(query, status, group)]
         return {"items": items, "counts": current.accounts.counts(),
-                "total": len(current.accounts.accounts)}
+                "total": len(current.accounts.accounts),
+                "groups": current.account_groups(),
+                "filter": {"query": query, "status": status, "group": group}}
 
     @api.post("/api/accounts")
     def accounts_add(payload: dict = Body(...)):
@@ -134,6 +136,33 @@ def create_app(state: Optional[ApiState] = None) -> FastAPI:
     @api.get("/api/accounts/export", response_class=PlainTextResponse)
     def accounts_export():
         return "\n".join(st().accounts.export_lines())
+
+    # ========================================================
+    # NHÓM TÀI KHOẢN
+    # ========================================================
+    @api.get("/api/accounts/groups")
+    def groups_list():
+        return st().account_groups()
+
+    @api.post("/api/accounts/groups")
+    def group_create(payload: dict = Body(...)):
+        try:
+            return st().create_group(payload.get("name") or "")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @api.delete("/api/accounts/groups/{name}")
+    def group_delete(name: str):
+        return st().delete_group(name)
+
+    @api.post("/api/accounts/group")
+    def group_assign(payload: dict = Body(...)):
+        """Thêm tài khoản đã chọn vào nhóm (`group` rỗng = bỏ khỏi nhóm)."""
+        current = st()
+        emails = payload.get("emails") or []
+        if not emails:
+            raise HTTPException(400, "Chọn ít nhất một tài khoản")
+        return current.assign_accounts_group(emails, payload.get("group") or "")
 
     @api.get("/api/accounts/{email}")
     def account_detail(email: str):

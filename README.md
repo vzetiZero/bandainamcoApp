@@ -8,6 +8,9 @@ in a real Chrome window per account.
 
 - **Accounts**: import `email|password|token` lines, search/filter, status badges, per-account
   progress, batch login checks (1–10 parallel), profile fields, kanji rename, delete, export.
+- **Account groups**: create/rename-free group labels, filter the list by group, move the selected
+  accounts into a group (or out of it); the campaign run panel can pick a group in one click.
+  Groups live with the accounts of that machine (`accounts_data.json` + `web_settings.json`).
 - **Campaigns**: one row per campaign with `open`/`close` dates; status and countdown are derived,
   not typed. Registrations per campaign, plus a run panel.
 - **Browser automation**: one Chrome per account (own profile, own proxy, own debug port), driven
@@ -74,6 +77,8 @@ change_name.py                CLI: rename a profile
 `POST /api/proxy/text` writes a pasted proxy list straight into the proxy file in use
 (`replace: false` appends and skips duplicates; malformed lines are reported with credentials
 masked) and reloads the proxy manager.
+Account groups: `GET/POST /api/accounts/groups`, `DELETE /api/accounts/groups/{name}`,
+`POST /api/accounts/group`, and `GET /api/accounts?group=<name|__none__>`.
 Long tasks (`/api/accounts/check`, `/api/browser/run`, `/api/proxy/check`, `/api/browser/discover`)
 return a job id; the UI polls `/api/jobs/{id}`. Docs at `/docs`.
 

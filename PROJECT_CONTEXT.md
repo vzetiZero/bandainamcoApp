@@ -39,6 +39,22 @@ Electron window (web/out) ──HTTP/JSON──> api/ (FastAPI) ──> app/serv
    city, address_number, phone, points…). Lỗi `UnexpectedRemoteAddress` ⇒ IP bị chặn.
 4. Mọi request HTTP đi qua `new_session()` để dùng proxy; proxy bị chặn nghỉ 300s.
 
+## 2b. Nhóm tài khoản
+
+- Mỗi tài khoản có trường `group` (tên nhóm, `""` = chưa vào nhóm) trong
+  `accounts_data.json`; danh sách tên nhóm (kể cả nhóm rỗng) ở `web_settings.json`
+  khoá `account_groups`. Nhóm gắn với bộ tài khoản của **từng máy**, khác với
+  `campaigns.json` (dùng chung).
+- Quy tắc thuần ở `app/domain/accounts.py`: `normalize_group()` (trim, gộp khoảng
+  trắng, tối đa 40 ký tự), `GROUP_UNGROUPED = "__none__"` cho bộ lọc "chưa vào nhóm",
+  tên bắt đầu bằng `__` bị từ chối; `matches_filters()` lọc theo email/trạng thái/nhóm.
+- Service: `AccountService.group_counts/assign_group/clear_group`; `ApiState` giữ
+  danh sách tên nhóm (`account_groups`) và gộp với tên đang dùng trong accounts.
+- API: `GET /api/accounts/groups`, `POST /api/accounts/groups` (tạo),
+  `DELETE /api/accounts/groups/{name}` (xoá nhóm — tài khoản vẫn còn, chỉ bỏ nhóm),
+  `POST /api/accounts/group` (gán `{emails, group}`, `group: ""` = bỏ nhóm),
+  `GET /api/accounts?group=<tên|__none__>` để lọc.
+
 ## 3. Chiến dịch
 
 - Mỗi chiến dịch: `name`, `url`, `opens_at`, `closes_at` (`YYYY-MM-DD HH:MM`), `notes`.
@@ -137,6 +153,9 @@ Khi chạy nhiều tài khoản: `use_account_address` lấy địa chỉ từ h
 
 `GET /api/health`, `/api/accounts`, `/api/campaigns`, `/api/settings`, `/api/proxy`,
 `/api/checkout`, `/api/logs?after=<seq>`, `/api/jobs[/{id}]`, `/api/browser/sessions`.
+Chiến dịch: `POST/PUT/DELETE /api/campaigns[/{row}]`, `/api/campaigns/{row}/signups`,
+`GET /api/campaigns/export`. Nhóm tài khoản: `/api/accounts/groups`,
+`/api/accounts/group` (xem §2b).
 `POST /api/proxy/text` ghi danh sách proxy dán từ ô text trong tab Cấu hình vào đúng file
 proxy đang dùng (`replace=false` = thêm vào cuối, bỏ dòng trùng; lỗi định dạng được báo lại
 với user/pass đã che) rồi nạp lại `proxy_manager`.
@@ -148,7 +167,7 @@ API **không** trả mật khẩu, số thẻ hay CVV. CORS cho `http://localhos
 
 | File | Nội dung | Git |
 |---|---|---|
-| `accounts_data.json` | danh sách tài khoản (email, password, trạng thái, hồ sơ) | ignored |
+| `accounts_data.json` | danh sách tài khoản (email, password, trạng thái, nhóm, hồ sơ) | ignored |
 | `web_settings.json` | tuỳ chọn UI/API **của từng máy** (proxy, browser, max_workers, ghi nhận đăng ký) | ignored |
 | `campaigns.json` | danh sách chiến dịch — dùng chung mọi máy (copy thư mục / `git pull`) | tracked |
 | `ui_settings.ini` | tuỳ chọn bản desktop cũ — chỉ dùng để chép sang lần đầu | ignored |

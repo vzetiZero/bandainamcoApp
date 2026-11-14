@@ -4,11 +4,27 @@ STATUS_ACTIVE = "Hoạt động"
 STATUS_INACTIVE = "Không hoạt động"
 STATUS_UNCHECKED = "Chưa kiểm tra"
 FILTER_STATUSES = (STATUS_ACTIVE, STATUS_INACTIVE, STATUS_UNCHECKED)
+# Lọc theo nhóm: "" = mọi nhóm, GROUP_UNGROUPED = tài khoản chưa vào nhóm nào,
+# còn lại là tên nhóm. Nhóm là nhãn do người dùng đặt, KHÔNG phải hồ sơ Parks2.
+GROUP_ALL = ""
+GROUP_UNGROUPED = "__none__"
+GROUP_MAX_LENGTH = 40
 # Các key meta không phải dữ liệu hồ sơ do Parks2 trả về.
 PROFILE_META_KEYS = frozenset({
     "email", "password", "status", "last_check", "profile_fetch_status",
-    "parks2_handoff_status",
+    "parks2_handoff_status", "group",
 })
+
+
+def normalize_group(name):
+    """Tên nhóm đã gộp khoảng trắng và cắt độ dài; "" = chưa vào nhóm."""
+    return " ".join(str(name or "").split())[:GROUP_MAX_LENGTH]
+
+
+def is_reserved_group(name):
+    """Tên nhóm dành riêng cho bộ lọc (không cho người dùng đặt)."""
+    return name.startswith("__")
+
 
 
 def parse_account_line(line):
@@ -73,9 +89,15 @@ def to_line(account):
     return line
 
 
-def matches_filters(account, query="", status=""):
-    """Lọc theo trạng thái và chuỗi tìm kiếm (chỉ so với email, không lộ mật khẩu)."""
+def matches_filters(account, query="", status="", group=""):
+    """Lọc theo trạng thái, nhóm và chuỗi tìm kiếm (chỉ so với email, không lộ mật khẩu)."""
     if status and account.get("status") != status:
+        return False
+    assigned = account.get("group") or ""
+    if group == GROUP_UNGROUPED:
+        if assigned:
+            return False
+    elif group and assigned != group:
         return False
     text = (query or "").strip().lower()
     return not text or text in (account.get("email") or "").lower()

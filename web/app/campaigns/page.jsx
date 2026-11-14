@@ -7,6 +7,8 @@ import { del, get, post, put } from '@/lib/api'
 import { useJob, usePoll } from '@/lib/hooks'
 
 const BLANK = { name: '', url: '', opens_at: '', closes_at: '', notes: '' }
+// Khớp GROUP_UNGROUPED của backend: lọc tài khoản chưa vào nhóm nào.
+const NO_GROUP = '__none__'
 
 // Ô chọn ngày/giờ của trình duyệt dùng dạng "YYYY-MM-DDTHH:MM", còn API lưu
 // "YYYY-MM-DD HH:MM" — đổi qua lại ở đây để form luôn hiện đúng giá trị đã lưu.
@@ -28,6 +30,7 @@ export default function CampaignsPage() {
   const [selectedRow, setSelectedRow] = useState(null)
   const [signups, setSignups] = useState([])
   const [runEmails, setRunEmails] = useState([])
+  const [groupFilter, setGroupFilter] = useState('')
   const [slot, setSlot] = useState('')
   const [submitEnabled, setSubmitEnabled] = useState(false)
   const [useAccountAddress, setUseAccountAddress] = useState(true)
@@ -41,6 +44,15 @@ export default function CampaignsPage() {
 
   const items = campaigns.data?.items || []
   const accountItems = accounts.data?.items || []
+  const groupNames = useMemo(
+    () => Array.from(new Set(accountItems.map((account) => account.group).filter(Boolean))).sort(),
+    [accountItems],
+  )
+  const visibleAccounts = useMemo(() => {
+    if (!groupFilter) return accountItems
+    if (groupFilter === NO_GROUP) return accountItems.filter((account) => !account.group)
+    return accountItems.filter((account) => account.group === groupFilter)
+  }, [accountItems, groupFilter])
   const current = selectedRow !== null ? items[selectedRow] : null
   const running = job?.status === 'running'
 
@@ -110,7 +122,7 @@ export default function CampaignsPage() {
     }
     const targets = runEmails.length
       ? runEmails
-      : accountItems
+      : visibleAccounts
           .filter((account) => account.status !== 'Không hoạt động')
           .map((account) => account.email)
     if (!targets.length) {
@@ -193,7 +205,14 @@ export default function CampaignsPage() {
         </Panel>
       )}
 
-      <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2.1fr) minmax(0, 1fr)', gap: 3 }}>
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: [null, null, 'minmax(0, 2.1fr) minmax(0, 1fr)'],
+          gap: 3,
+          alignItems: 'start',
+        }}
+      >
         <Box>
           <Panel title="Danh sách chiến dịch" subtitle="Bấm một dòng để chọn và xem đăng ký">
             <ScrollTable maxHeight="min(46vh, 420px)">
@@ -325,11 +344,34 @@ export default function CampaignsPage() {
                 onChange={(event) => setSubmitEnabled(event.target.checked)}
                 hint="BẬT = app bấm 入力内容を確認する → 注文する: đơn 抽選 được gửi thật, không huỷ được. TẮT = dừng ở trang ご注文情報入力 để bạn tự kiểm tra."
               />
-              <Text sx={{ display: 'block', fontSize: 1, color: 'muted', mb: 2 }}>
-                Tài khoản ({runEmails.length ? `${runEmails.length} chọn` : 'mặc định: tất cả chưa lỗi'})
-              </Text>
+              <Flex sx={{ gap: 2, alignItems: 'center', mb: 2 }}>
+                <Text sx={{ flex: 1, fontSize: 1, color: 'muted' }}>
+                  Tài khoản ({runEmails.length
+                    ? `${runEmails.length} chọn`
+                    : 'mặc định: cả danh sách đang xem'})
+                </Text>
+                <Select
+                  value={groupFilter}
+                  onChange={(event) => { setGroupFilter(event.target.value); setRunEmails([]) }}
+                  sx={{ maxWidth: 150, fontSize: 1, py: 1 }}
+                  title="Chỉ hiện tài khoản của một nhóm"
+                >
+                  <option value="">Tất cả nhóm</option>
+                  <option value={NO_GROUP}>Chưa vào nhóm</option>
+                  {groupNames.map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </Select>
+                <Button
+                  variant="ghost"
+                  sx={{ fontSize: 1 }}
+                  onClick={() => setRunEmails(visibleAccounts.map((account) => account.email))}
+                >
+                  Chọn cả nhóm
+                </Button>
+              </Flex>
               <Box sx={{ maxHeight: 220, overflowY: 'auto', border: '1px solid', borderColor: 'border', borderRadius: 'small', p: 2 }}>
-                {accountItems.map((account) => (
+                {visibleAccounts.map((account) => (
                   <label
                     key={account.email}
                     style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', fontSize: 12 }}
@@ -342,8 +384,14 @@ export default function CampaignsPage() {
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {account.email}
                     </span>
+                    {account.group && (
+                      <span style={{ fontSize: 10, color: '#8a94a6' }}>{account.group}</span>
+                    )}
                   </label>
                 ))}
+                {visibleAccounts.length === 0 && (
+                  <Text sx={{ fontSize: 1, color: 'muted' }}>Nhóm này chưa có tài khoản.</Text>
+                )}
               </Box>
               <Button sx={{ mt: 3, width: '100%' }} onClick={startRun} disabled={running || !current}>
                 {running ? 'Đang chạy…' : 'Chạy bằng Chrome'}

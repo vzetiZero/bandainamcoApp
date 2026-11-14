@@ -17,6 +17,7 @@ from app.config import (
     DEFAULT_BROWSER_PARALLEL, DEFAULT_CONCURRENCY, MAX_BROWSER_PARALLEL,
     MAX_CONCURRENCY, SETTINGS_FILE, WEB_SETTINGS_FILE,
 )
+from app.domain import accounts as accounts_domain
 from app.domain import checkout as checkout_domain
 from app.infrastructure.account_repository import AccountRepository
 from app.infrastructure.bandai_auth import BandaiAuthClient
@@ -35,6 +36,9 @@ from proxy_manager import PROXY_FILE, proxy_manager, set_event_sink
 
 MAX_LOG_LINES = 500
 LOG_LEVELS = ("info", "warn", "error", "ok")
+# Tên nhóm tài khoản lưu trong web_settings.json của từng máy (nhóm gắn với bộ tài
+# khoản riêng của máy, không dùng chung như campaigns.json).
+ACCOUNT_GROUPS_KEY = "account_groups"
 
 
 # ============================================================
@@ -223,8 +227,70 @@ class ApiState:
         """Bản gửi ra UI: không bao giờ trả mật khẩu."""
         data = {key: value for key, value in account.items() if key != "password"}
         data["email"] = account.get("email", "")
+        data["group"] = account.get("group") or ""
         data["has_password"] = bool(account.get("password"))
         return data
+
+    # ---------------- nhóm tài khoản ----------------
+    def account_groups(self) -> dict:
+        """Nhóm đang có = tên đã lưu (kể cả nhóm rỗng) + tên đang dùng trong accounts.
+
+        Tên nhóm lưu ở `web_settings.json` của từng máy (nhóm gắn với bộ tài khoản
+        của máy đó, không phải dữ liệu dùng chung như chiến dịch).
+        """
+        names = [name for name in self.settings.get_json(ACCOUNT_GROUPS_KEY, "[]")
+                 if isinstance(name, str) and name]
+        counts = self.accounts.group_counts()
+        for name in counts:
+            if name not in names:
+                names.append(name)
+        items = [{"name": name, "count": counts.get(name, 0)} for name in names]
+        items.sort(key=lambda item: item["name"].lower())
+        ungrouped = sum(1 for account in self.accounts.accounts
+                        if not account.get("group"))
+        return {"groups": items, "ungrouped": ungrouped,
+                "total": len(self.accounts.accounts)}
+
+    def _remember_group_names(self):
+        """Ghi tên nhóm để nhóm chưa có tài khoản vẫn còn sau khi khởi động lại."""
+        names = [item["name"] for item in self.account_groups()["groups"]]
+        self.settings.set_json(ACCOUNT_GROUPS_KEY, names)
+
+    def create_group(self, name: str) -> dict:
+        clean = accounts_domain.normalize_group(name)
+        if not clean:
+            raise ValueError("Tên nhóm không được để trống")
+        if accounts_domain.is_reserved_group(clean):
+            raise ValueError("Tên nhóm không được bắt đầu bằng __")
+        existing = self.account_groups()["groups"]
+        if not any(item["name"] == clean for item in existing):
+            names = {item["name"] for item in existing}
+            names.add(clean)
+            self.settings.set_json(ACCOUNT_GROUPS_KEY, sorted(names))
+            self.log("Nhóm: tạo '%s'" % clean, "ok")
+        return self.account_groups()
+
+    def delete_group(self, name: str) -> dict:
+        clean = accounts_domain.normalize_group(name)
+        cleared = self.accounts.clear_group(clean)
+        kept = [item for item in self.settings.get_json(ACCOUNT_GROUPS_KEY, "[]")
+                if item != clean]
+        self.settings.set_json(ACCOUNT_GROUPS_KEY, kept)
+        self.save_accounts()
+        self.log("Nhóm: xoá '%s' (%d tài khoản về chưa vào nhóm)" % (clean, cleared), "warn")
+        return {"cleared": cleared, **self.account_groups()}
+
+    def assign_accounts_group(self, emails, group: str) -> dict:
+        """Thêm/chuyển tài khoản vào nhóm; `group` rỗng = bỏ khỏi nhóm."""
+        clean = accounts_domain.normalize_group(group)
+        changed = self.accounts.assign_group(emails, clean)
+        self.save_accounts()
+        if clean:
+            self.create_group(clean)
+        self._remember_group_names()
+        if changed:
+            self.log("Nhóm: %d tài khoản → %s" % (changed, clean or "chưa vào nhóm"), "ok")
+        return {"changed": changed, **self.account_groups()}
 
     # ---------------- chiến dịch ----------------
     def campaign_view(self, campaign: dict, row: int) -> dict:

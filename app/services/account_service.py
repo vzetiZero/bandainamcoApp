@@ -4,7 +4,7 @@ from typing import Iterable, List, Optional
 
 from app.domain.accounts import (
     STATUS_ACTIVE, STATUS_INACTIVE, count_by_status, matches_filters, new_account,
-    parse_account_line, preview_lines, profile_fields, to_line,
+    normalize_group, parse_account_line, preview_lines, profile_fields, to_line,
 )
 
 
@@ -58,15 +58,47 @@ class AccountService:
         return next((account for account in self.accounts
                      if account.get("email") == email), None)
 
-    def visible(self, query: str = "", status: str = "") -> List[dict]:
+    def visible(self, query: str = "", status: str = "", group: str = "") -> List[dict]:
         return [account for account in self.accounts
-                if matches_filters(account, query, status)]
+                if matches_filters(account, query, status, group)]
 
     def counts(self):
         return count_by_status(self.accounts)
 
     def export_lines(self) -> List[str]:
         return [to_line(account) for account in self.accounts]
+
+    # ---- nhóm tài khoản ----
+    def group_counts(self) -> dict:
+        """Số tài khoản theo từng nhóm đang được dùng."""
+        counts = {}
+        for account in self.accounts:
+            name = account.get("group") or ""
+            if name:
+                counts[name] = counts.get(name, 0) + 1
+        return counts
+
+    def assign_group(self, emails: Iterable[str], group: str) -> int:
+        """Gán `group` ("" = bỏ khỏi nhóm) cho các email; trả số tài khoản đã đổi."""
+        name = normalize_group(group)
+        targets = {email for email in emails if email}
+        changed = 0
+        for account in self.accounts:
+            if account.get("email") not in targets:
+                continue
+            if (account.get("group") or "") != name:
+                account["group"] = name
+                changed += 1
+        return changed
+
+    def clear_group(self, group: str) -> int:
+        """Xoá nhóm: mọi tài khoản trong nhóm trở về "chưa vào nhóm"."""
+        name = normalize_group(group)
+        if not name:
+            return 0
+        rows = [account.get("email") for account in self.accounts
+                if (account.get("group") or "") == name]
+        return self.assign_group(rows, "")
 
     # ---- cập nhật trạng thái / hồ sơ ----
     def set_status(self, email: str, success: bool) -> bool:
