@@ -1,6 +1,6 @@
 ﻿'use client'
 
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Badge, Box, Button, Flex, Input, Select, Text } from 'theme-ui'
 import { Empty, Panel, Progress, ScrollTable, StatusBadge, TextField, CheckField } from '@/components/ui'
 import { del, get, post, put } from '@/lib/api'
@@ -9,10 +9,11 @@ import { useJob, usePoll } from '@/lib/hooks'
 const BLANK = { name: '', url: '', opens_at: '', closes_at: '', notes: '' }
 // Khớp GROUP_UNGROUPED của backend: lọc tài khoản chưa vào nhóm nào.
 const NO_GROUP = '__none__'
-// Mã 種類 của Parks2 dạng `<mã_hàng>_<MMDD>_<HHMM>_1`; giờ nhận chỉ có các khung cố
-// định, nên chọn giờ trong danh sách còn mã khác thì dán tay ở ô "Mã slot khác".
+// Mã 種類 của Parks2 dạng `<mã_hàng>_<MMDD>_<HHMM>_1`. Danh sách ngày/giờ thật được đọc
+// từ trang chiến dịch (`/api/campaigns/slot-options`); các khung dưới chỉ để ghép mã ở
+// chế độ "giờ cố định".
 const SLOT_ITEM = '159016'
-const SLOT_TIMES = ['11:00', '11:30', '12:00', '13:30', '16:00', '18:30']
+const SLOT_TIMES = ['11:00', '13:30', '16:00', '18:30']
 const SLOT_RECIPE_DEFAULT = '159016_1121_1100_1'
 
 // Ô chọn ngày/giờ của trình duyệt dùng dạng "YYYY-MM-DDTHH:MM", còn API lưu
@@ -38,13 +39,17 @@ export default function CampaignsPage() {
   const [groupFilter, setGroupFilter] = useState('')
   // Ngày nhận hàng (slot) chọn bằng ô ngày + khung giờ; chế độ "ngẫu nhiên" thì mỗi
   // tài khoản nhận một khung giờ khác nhau (chia đều) thay vì cả loạt cùng một giờ.
-  // Mặc định NGẪU NHIÊN: mỗi tài khoản một khung giờ, tránh cả loạt cùng một giờ.
+  // Mặc định NGẪU NHIÊN: mỗi tài khoản một ngày/giờ, tránh cả loạt cùng một giờ.
   const [slotMode, setSlotMode] = useState('random')
   const [slotDate, setSlotDate] = useState('')
   const [slotTime, setSlotTime] = useState('11:00')
-  const [slotTimes, setSlotTimes] = useState(SLOT_TIMES)
   const [slotCode, setSlotCode] = useState('')
-  // Mã 種類 dán tay (mỗi dòng một mã) cho chiến dịch có mã khác dạng chuẩn.
+  // Mã 種類 đọc từ trang chiến dịch (nguồn đúng nhất) + các mã người dùng tick.
+  const [siteOptions, setSiteOptions] = useState([])
+  const [pickedCodes, setPickedCodes] = useState([])
+  const [slotOptionsError, setSlotOptionsError] = useState('')
+  const [loadingOptions, setLoadingOptions] = useState(false)
+  // Mã 種類 dán tay (mỗi dòng một mã) khi không đọc được trang.
   const [slotCodesText, setSlotCodesText] = useState('')
   // Mặc định BẬT: chạy là chốt đơn thật. Tắt khi chỉ muốn điền form rồi tự kiểm tra.
   const [submitEnabled, setSubmitEnabled] = useState(true)
@@ -139,29 +144,51 @@ export default function CampaignsPage() {
       .map((account) => account.email)
   }, [runEmails, visibleAccounts])
 
-  // Mã hàng của chiến dịch 熊本店 (159016) — kiểm tra lại bằng danh sách mã 種類 của
-  // trang nếu site đổi; đổi mã thì dùng ô "Mã slot khác" hoặc mã 種類 dán tay.
+  // Mã hàng của chiến dịch 熊本店 (159016) — danh sách thật của trang lấy ở "Tải lại".
   const slotItem = SLOT_ITEM
 
-  const missingDate = slotMode === 'random' && !slotDate
-  const slotCodes = useMemo(
+  // Đọc danh sách 種類 thật của trang (ngày/giờ + mã) mỗi khi đổi chiến dịch.
+  const loadSlotOptions = useCallback(async () => {
+    if (!current?.url) {
+      setSiteOptions([])
+      setPickedCodes([])
+      return
+    }
+    setLoadingOptions(true)
+    setSlotOptionsError('')
+    try {
+      const data = await get(`/api/campaigns/slot-options?url=${encodeURIComponent(current.url)}`)
+      const items = data.items || []
+      setSiteOptions(items)
+      setPickedCodes(items.map((item) => item.value))   // mặc định chọn hết
+      if (!items.length) setSlotOptionsError('Trang không có mã 種類 nào')
+    } catch (err) {
+      setSiteOptions([])
+      setPickedCodes([])
+      setSlotOptionsError(err.message)
+    } finally {
+      setLoadingOptions(false)
+    }
+  }, [current])
+
+  useEffect(() => { loadSlotOptions() }, [loadSlotOptions])
+
+  const pastedCodes = useMemo(
     () => slotCodesText.split(/[\s,]+/).map((code) => code.trim()).filter(Boolean),
     [slotCodesText],
   )
-  const hasSlotCodes = slotMode === 'random' && slotCodes.length > 0
-  const missingTimes = slotMode === 'random' && !hasSlotCodes && slotTimes.length === 0
-  const missingRandomInput = slotMode === 'random' && !hasSlotCodes && !slotDate
-  const canRun = Boolean(current) && runTargets.length > 0 && !missingTimes && !missingRandomInput
+  // Mã dùng để chia ngẫu nhiên: mã tick từ trang, không có thì dùng mã dán tay.
+  const activeCodes = pickedCodes.length ? pickedCodes : pastedCodes
+  const needsCodes = slotMode === 'random' && activeCodes.length === 0
+  const canRun = Boolean(current) && runTargets.length > 0 && !needsCodes
 
   const startRun = async () => {
     if (!current) {
       setMessage('Bấm một dòng trong "Danh sách chiến dịch" để chọn chiến dịch trước')
       return
     }
-    if (missingTimes || missingRandomInput) {
-      setMessage(missingRandomInput
-        ? 'Chế độ ngẫu nhiên: chọn "Ngày nhận hàng" hoặc dán danh sách mã 種類 (hoặc đổi sang "Giờ cố định")'
-        : 'Chế độ ngẫu nhiên: tick ít nhất một khung giờ')
+    if (needsCodes) {
+      setMessage('Chế độ ngẫu nhiên: bấm "Tải lại" để lấy mã ngày/giờ từ trang rồi tick ít nhất một mã')
       return
     }
     const targets = runTargets
@@ -178,8 +205,8 @@ export default function CampaignsPage() {
         slot_random: slotMode === 'random',
         slot_item: slotItem,
         slot_date: slotDate,
-        slot_times: slotMode === 'random' ? slotTimes : [],
-        slot_codes: hasSlotCodes ? slotCodes : [],
+        slot_times: slotMode === 'random' ? [] : [],
+        slot_codes: slotMode === 'random' ? activeCodes : [],
         use_account_address: useAccountAddress,
         clear_cart: clearCart,
         use_proxy: useProxy,
@@ -398,44 +425,73 @@ export default function CampaignsPage() {
                 <Box sx={{ border: '1px solid', borderColor: 'border', borderRadius: 'small', p: 2, mb: 1 }}>
                   <Flex sx={{ alignItems: 'center', gap: 2, mb: 1 }}>
                     <Text sx={{ flex: 1, fontSize: 1, color: 'muted' }}>
-                      Khung giờ được phép ({slotTimes.length})
+                      Ngày/giờ lấy từ trang ({pickedCodes.length}/{siteOptions.length})
                     </Text>
                     <Button
                       variant="ghost"
                       sx={{ fontSize: 1, px: 1, py: 0 }}
-                      onClick={() => setSlotTimes(slotTimes.length === SLOT_TIMES.length ? [] : SLOT_TIMES)}
+                      disabled={!siteOptions.length}
+                      onClick={() => setPickedCodes(
+                        pickedCodes.length === siteOptions.length
+                          ? []
+                          : siteOptions.map((item) => item.value))}
                     >
-                      {slotTimes.length === SLOT_TIMES.length ? 'Bỏ chọn' : 'Chọn tất cả'}
+                      {pickedCodes.length === siteOptions.length && siteOptions.length
+                        ? 'Bỏ chọn'
+                        : 'Chọn tất cả'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      sx={{ fontSize: 1, px: 1, py: 0 }}
+                      disabled={!current || loadingOptions}
+                      onClick={loadSlotOptions}
+                    >
+                      {loadingOptions ? 'Đang tải…' : 'Tải lại'}
                     </Button>
                   </Flex>
-                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                    {SLOT_TIMES.map((time) => (
+                  {slotOptionsError && (
+                    <Text sx={{ display: 'block', fontSize: 0, color: 'error', mb: 1 }}>
+                      {slotOptionsError}
+                    </Text>
+                  )}
+                  <Box
+                    sx={{
+                      display: 'flex', flexWrap: 'wrap', gap: 2,
+                      maxHeight: 160, overflowY: 'auto',
+                    }}
+                  >
+                    {siteOptions.map((option) => (
                       <label
-                        key={time}
+                        key={option.value}
+                        title={option.label}
                         style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}
                       >
                         <input
                           type="checkbox"
-                          checked={slotTimes.includes(time)}
-                          onChange={() => setSlotTimes((current) =>
-                            current.includes(time)
-                              ? current.filter((item) => item !== time)
-                              : [...current, time])}
+                          checked={pickedCodes.includes(option.value)}
+                          onChange={() => setPickedCodes((current) =>
+                            current.includes(option.value)
+                              ? current.filter((item) => item !== option.value)
+                              : [...current, option.value])}
                         />
-                        {time}
+                        {option.when}
                       </label>
                     ))}
+                    {!siteOptions.length && !loadingOptions && (
+                      <Text sx={{ fontSize: 0, color: 'muted' }}>
+                        Chưa có mã của trang — bấm &quot;Tải lại&quot;, hoặc dán mã tay bên dưới.
+                      </Text>
+                    )}
                   </Box>
                   <Text sx={{ display: 'block', fontSize: 0, color: 'muted', mt: 2, mb: 1 }}>
-                    Hoặc dán mã 種類 lấy từ trang (mỗi dòng một mã) — dùng khi chiến dịch
-                    có mã khác dạng; dán rồi thì bỏ qua ngày/khung giờ ở trên.
+                    Hoặc dán mã 種類 (mỗi dòng một mã) — chỉ dùng khi không đọc được trang.
                   </Text>
                   <Box
                     as="textarea"
                     rows={3}
                     value={slotCodesText}
                     onChange={(event) => setSlotCodesText(event.target.value)}
-                    placeholder={'ECCL00000062_1121_1100_1\nECCL00000062_1121_1330_1'}
+                    placeholder={'159016_1121_1100_1\n159016_1121_1330_1'}
                     sx={{
                       width: '100%', fontFamily: 'mono', fontSize: 1, p: 2,
                       border: '1px solid', borderColor: 'border', borderRadius: 'small',
@@ -447,9 +503,7 @@ export default function CampaignsPage() {
               <Text sx={{ display: 'block', fontSize: 0, color: 'muted', mb: 2 }}>
                 Mã hàng: {slotItem}
                 {slotMode === 'random'
-                  ? (hasSlotCodes
-                    ? ` · chia ngẫu nhiên ${slotCodes.length} mã 種類 đã dán`
-                    : ` · mỗi tài khoản nhận 1 trong ${slotTimes.length} khung giờ, chia đều ngẫu nhiên`)
+                  ? ` · chia ngẫu nhiên ${activeCodes.length} mã ngày/giờ`
                   : ` · mã slot: ${slotValue || `mặc định trong recipe (${SLOT_RECIPE_DEFAULT})`}`}
               </Text>
               {slotMode === 'fixed' && (
@@ -534,14 +588,9 @@ export default function CampaignsPage() {
                   <Text sx={{ fontSize: 1, color: 'muted' }}>Nhóm này chưa có tài khoản.</Text>
                 )}
               </Box>
-              {missingRandomInput && (
+              {needsCodes && (
                 <Text sx={{ display: 'block', fontSize: 1, color: 'error', mb: 1 }}>
-                  Chọn "Ngày nhận hàng", hoặc dán danh sách mã 種類, hoặc đổi sang "Giờ cố định".
-                </Text>
-              )}
-              {missingTimes && (
-                <Text sx={{ display: 'block', fontSize: 1, color: 'error', mb: 1 }}>
-                  Tick ít nhất một khung giờ được phép.
+                  Tick ít nhất một ngày/giờ ở danh sách trên (bấm &quot;Tải lại&quot; nếu trống).
                 </Text>
               )}
               <Box sx={{ mt: 3, pt: 3, borderTop: '1px solid', borderColor: 'border' }}>
@@ -549,9 +598,7 @@ export default function CampaignsPage() {
                   Sẽ chạy {runTargets.length} tài khoản cho{' '}
                   <strong>{current ? current.name : '— chưa chọn chiến dịch —'}</strong>
                   {slotMode === 'random'
-                    ? (hasSlotCodes
-                      ? ` · ${slotCodes.length} mã 種類 chia ngẫu nhiên`
-                      : ` · ngày ${slotDate || '?'} · giờ ngẫu nhiên trong ${slotTimes.length} khung`)
+                    ? ` · ${activeCodes.length} ngày/giờ chia ngẫu nhiên`
                     : ` · ${slotValue ? `giờ ${slotValue.split('_').slice(1, 3).join(' ')}` : 'giờ theo recipe'}`}
                   {submitEnabled ? ' · chốt đơn thật' : ' · chỉ điền, không gửi'}
                 </Text>

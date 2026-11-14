@@ -9,6 +9,7 @@ lặp vòng) thay vì để cả loạt tài khoản cùng một giờ — giố
 khác nhau, và không dồn hết vào một khung.
 """
 import random
+import re
 
 SLOT_ITEM_DEFAULT = "159016"
 SLOT_UNITS = "1"
@@ -84,3 +85,35 @@ def describe_plan(plan):
         counts[short] = counts.get(short, 0) + 1
     items = sorted(counts.items())
     return ", ".join("%s=%d" % (key, value) for key, value in items)
+
+
+def describe_code(code):
+    """Nhãn dễ đọc cho mã 種類: `159016_1121_1330_1` -> `11/21 13:30`."""
+    parsed = split_slot_code(code)
+    if not parsed:
+        return str(code or "")
+    _item, date_text, time_text = parsed
+    return "%s/%s %s" % (date_text[5:7], date_text[8:10], time_text)
+
+
+def parse_options(html, selector_id="PRIORITY_ITEMPROPERTY_CD_MATRIX_0"):
+    """Đọc danh sách 種類 thật của trang item: [{'value', 'label', 'when'}].
+
+    Site chỉ mở một số ngày/khung giờ nhất định (vd 11/21–11/24 × 11:00/13:30/16:00/18:30),
+    nên UI lấy đúng danh sách này thay vì đoán mã.
+    """
+    pattern = re.compile(
+        r"<select\b[^>]*id=\"%s\"[^>]*>(.*?)</select>" % re.escape(selector_id),
+        re.S | re.I)
+    match = pattern.search(html or "")
+    if not match:
+        return []
+    options = []
+    for value, label in re.findall(
+            r"<option\b[^>]*value=\"([^\"]*)\"[^>]*>(.*?)</option>", match.group(1), re.S):
+        value = value.strip()
+        text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", label)).strip()
+        if not value:
+            continue  # "選択してください"
+        options.append({"value": value, "label": text, "when": describe_code(value)})
+    return options

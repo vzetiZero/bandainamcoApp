@@ -306,6 +306,18 @@ def create_app(state: Optional[ApiState] = None) -> FastAPI:
             raise HTTPException(404, "%s không có trong danh sách đã đăng ký" % email)
         return {"signups": current.campaigns.signups_for(campaign)}
 
+    @api.get("/api/campaigns/slot-options")
+    def campaign_slot_options(url: str = ""):
+        """Danh sách 種類 (ngày/giờ nhận) thật của trang chiến dịch, đọc qua proxy."""
+        from app.infrastructure.parks2_item import ItemPageError, fetch_slot_options
+
+        try:
+            options = fetch_slot_options(url)
+        except ItemPageError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        st().log("Chiến dịch: đọc được %d mã 種類 từ trang" % len(options))
+        return {"items": options, "url": url}
+
     @api.get("/api/campaigns/export", response_class=PlainTextResponse)
     def campaigns_export():
         lines = []

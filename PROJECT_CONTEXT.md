@@ -143,6 +143,12 @@ Hai chế độ giờ nhận (`app/domain/campaign_slot.py`):
 Mã hàng (種類) của chiến dịch 熊本店 là **159016** (xác nhận từ chính trang item: option
 `159016_<MMDD>_<HHMM>_1`, ngày 11/21–11/24 × 11:00/13:30/16:00/18:30).
 
+**Danh sách 種類 lấy từ trang, không đoán**: `GET /api/campaigns/slot-options?url=…`
+(`app/infrastructure/parks2_item.py` → `campaign_slot.parse_options`) đọc đúng các option của
+`#PRIORITY_ITEMPROPERTY_CD_MATRIX_0` qua proxy, trả `{value, label, when}`. UI tick nhiều
+ngày/giờ một lúc rồi chia ngẫu nhiên cho từng tài khoản; mã không có trên trang (vd giờ
+`1130`) sẽ không chọn được nữa, và nếu select trượt thì runner báo luôn danh sách mã thật.
+
 Chiến dịch 景品ミニゲーム (vd `ECCL00000062…`) cần **serial code riêng từng tài khoản**:
 trang có modal `#ITEM_SERIAL_CODE_MODAL` + nút `a.js_serial-check-btn`
 (シリアルコードを送信), lỗi hiện ở `#ITEM_SERIAL_CHECK_MODAL_ERROR_MESSAGE`. Serial lấy từ
