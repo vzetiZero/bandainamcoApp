@@ -47,6 +47,13 @@ SITE_ERROR_HINTS = (
     "受付を終了しました",
     "アクセスが集中しております",
 )
+# Câu giải thích tiếng Việt cho các lỗi site hay gặp (hiện thẳng lên UI).
+SITE_ERROR_MESSAGES = {
+    "商品コードが指定されていません":
+        "chưa chọn 種類 (ngày/giờ nhận) nên site không cho thêm vào giỏ",
+}
+# Giỏ đã có sản phẩm: site không cho thêm nữa. Không phải lỗi — đi thẳng trang giỏ.
+CART_FULL_HINTS = ("カート内の商品数とカートに入れる商品数の合計が 1 以下",)
 # Ô chứa câu lỗi cụ thể của site (vd serial code sai/đã dùng): đọc trước khi dò chữ.
 SITE_ERROR_SELECTORS = ("#ITEM_SERIAL_CHECK_MODAL_ERROR_MESSAGE",)
 
@@ -78,6 +85,10 @@ class _ProxyRetry(Exception):
 
 class _SiteError(Exception):
     """Site hiện thông báo lỗi ngay sau thao tác: dừng lượt chạy của tài khoản đó."""
+
+
+class _CartAlreadyFull(Exception):
+    """Giỏ đã có sản phẩm (site báo không thêm được): đi thẳng trang giỏ và chạy tiếp."""
 
 
 def _artifacts_dir(email):
@@ -113,6 +124,8 @@ class CampaignBrowserRunner:
         # Xoá dòng giỏ cũ trước khi thêm slot mới (đổi khung giờ mà không bị 2 dòng).
         self.clear_cart = bool(clear_cart)
         self.campaign_url = ""
+        # URL trang giỏ lấy từ bước clear_cart của recipe (không hard-code trong code).
+        self._cart_url = ""
 
     # ---------------- API chính ----------------
     def run(self, email, password, campaign_url, on_progress=None):
@@ -280,9 +293,12 @@ class CampaignBrowserRunner:
 
         report(15)
         if campaign_url:
-            session.goto(campaign_url)
+            probe = session.goto(campaign_url)
             session.page.wait_for_timeout(900)
-            if looks_logged_in():
+            # 403/không tải được thì trang không có selector đăng nhập -> đừng vội coi là
+            # "đã đăng nhập" (nếu không sẽ bỏ qua bước login rồi chết ở trang chiến dịch).
+            reachable = probe is not None and probe.status < 400
+            if reachable and looks_logged_in():
                 self.on_log("[%s] phiên còn đăng nhập, bỏ qua bước login" % email)
                 return True
         self.on_log("[%s] đăng nhập" % email)
@@ -307,6 +323,12 @@ class CampaignBrowserRunner:
         total = max(1, len(steps))
         for index, step in enumerate(steps):
             action = step.get("action")
+            # Giỏ đã có sản phẩm: bỏ bước mở modal / bấm 購入手続き vì đã ở trang giỏ.
+            if result.details.get("cart_full") and "購入手続き" in (
+                    str(step.get("selector") or "") + str(step.get("value") or "")):
+                self.on_log("[%s] bỏ bước '%s' (giỏ đã có sản phẩm)"
+                            % (email, step.get("name") or action))
+                continue
             if step.get("requires_submit") and not self.submit:
                 result.last_step = "%s (bỏ vì chưa bật submit)" % action
                 return True
@@ -491,9 +513,14 @@ class CampaignBrowserRunner:
             if message:
                 raise _SiteError("Site báo: 「%s」" % message)
         text = session.page_text()
+        for hint in CART_FULL_HINTS:
+            if hint in text:
+                raise _CartAlreadyFull(hint)
         for hint in SITE_ERROR_HINTS:
             if hint in text:
-                raise _SiteError("Site báo: 「%s」" % hint)
+                detail = SITE_ERROR_MESSAGES.get(hint)
+                raise _SiteError("Site báo: 「%s」%s"
+                                 % (hint, (" — " + detail) if detail else ""))
 
     def _element_text(self, page, selector):
         """Chữ đang hiện trong một ô ('' nếu không có/không đọc được)."""
@@ -535,6 +562,7 @@ class CampaignBrowserRunner:
             if not self.clear_cart:
                 self.on_log("[%s] bỏ clear_cart (chưa bật xoá giỏ cũ)" % email)
                 return
+            self._cart_url = self._cart_url or value
             self._clear_cart(session, email, value, selector, self.campaign_url)
         elif action == "fill":
             if step.get("only_if_empty") and self._current_value(page, selector):
@@ -559,7 +587,17 @@ class CampaignBrowserRunner:
         elif action == "click":
             self._click(page, selector, timeout)
             page.wait_for_timeout(int(step.get("settle") or 400))
-            self._raise_site_error(session)
+            try:
+                self._raise_site_error(session)
+            except _CartAlreadyFull:
+                # Sản phẩm đã nằm trong giỏ (lần chạy trước hoặc thêm bằng tay):
+                # không thêm được nữa, đi thẳng trang giỏ và chạy tiếp các bước sau.
+                self.on_log("[%s] giỏ đã có sản phẩm (%s) — bỏ qua bước thêm, vào thẳng trang giỏ"
+                            % (email, step.get("name") or selector))
+                result.details["cart_full"] = True
+                if self._cart_url:
+                    session.goto(self._cart_url)
+                    page.wait_for_timeout(1200)
         elif action == "press":
             key = step.get("key") or "Enter"
             if selector:

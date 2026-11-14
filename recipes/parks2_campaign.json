@@ -1,6 +1,6 @@
 ﻿{
   "name": "parks2_kumamoto_op18",
-  "_note": "Recipe thật, dò từ site ngày 2026-11-14. Luồng: login form Parks2 -> trang item -> đóng popup 本人確認 -> chọn 種類/数量 -> カートに入れる -> 購入手続きに進む -> cart_index -> cart_seisan (ご注文情報入力) -> PAUSE (để người dùng tự điền địa chỉ/thanh toán). Đổi ngày giờ nhận hàng ở bước 'chọn ngày/giờ' (PRIORITY_ITEMPROPERTY_CD_MATRIX_0) hoặc dùng --slot ở CLI.",
+  "_note": "Chiến dịch 熊本店 抽選: login → trang item → tick 内容確認しました (#confirmCheck) → chọn 種類 (#PRIORITY_ITEMPROPERTY_CD_MATRIX_0, mã 159016_<MMDD>_<HHMM>_1) + 数量 → bấm #addCart → modal カートに追加されました → 購入手続きに進む → cart → cart_seisan → điền ご依頼主 → 入力内容を確認する → 注文する → ご注文完了. Biến: {email} {password} {token} (serial 景品ミニゲーム, chỉ khi cần) {l_name} {f_name} {l_kana} {f_kana} {zip} {pref} {city} {street} {building} {tel} {card_*}.",
   "login": {
     "url": "https://parks2.bandainamco-am.co.jp/login.html?request=redirect_logon&redirectTo=member_mypage.html",
     "logged_in_selector": "a[href*=\"request=logoff\"]",
@@ -88,32 +88,6 @@
         "name": "bấm カートに入れる",
         "action": "click",
         "selector": "#addCart"
-      },
-      {
-        "action": "wait_selector",
-        "selector": "#ITEM_SERIAL_CODE_MODAL",
-        "timeout": 10000,
-        "when": "{token}",
-        "name": "chờ ô serial code (chiến dịch 景品ミニゲーム)"
-      },
-      {
-        "action": "fill",
-        "selector": "#ITEM_SERIAL_CODE_MODAL",
-        "value": "{token}",
-        "when": "{token}",
-        "name": "nhập serial code của tài khoản"
-      },
-      {
-        "action": "click",
-        "selector": "a.js_serial-check-btn",
-        "settle": 1500,
-        "when": "{token}",
-        "name": "gửi serial code (シリアルコードを送信)"
-      },
-      {
-        "action": "screenshot",
-        "value": "serial-code",
-        "when": "{token}"
       },
       {
         "name": "chờ popup thêm giỏ",

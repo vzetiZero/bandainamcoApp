@@ -42,7 +42,24 @@ def load_campaigns():
     store = FileSettingsStore(WEB_SETTINGS_FILE, legacy_ini=SETTINGS_FILE)
     service = CampaignService(CampaignStore(CAMPAIGNS_FILE), signup_store=store)
     service.load()
-    return service, service.campaigns
+    return service, store
+
+
+def apply_proxy_settings(store, disabled=False):
+    """Áp cấu hình proxy trong web_settings.json cho cả HTTP lẫn Chrome (như API).
+
+    Site chặn theo IP (`ご利用中のIPアドレスからのアクセスが制限されています`), nên chạy
+    CLI mà quên bật proxy sẽ hỏng ngay từ trang đăng nhập.
+    """
+    from proxy_manager import PROXY_FILE, proxy_manager
+
+    proxy_manager.path = store.get("proxy_file", PROXY_FILE) or PROXY_FILE
+    proxy_manager.mode = store.get("proxy_mode", "per_request") or "per_request"
+    proxy_manager.enabled = False if disabled else store.get_bool("proxy_enabled", False)
+    proxies, _errors = proxy_manager.load()
+    log("Proxy: %s — %d dòng trong %s"
+        % ("bật" if proxy_manager.enabled else "tắt", len(proxies), proxy_manager.path))
+    return proxy_manager
 
 
 def pick_campaign(campaigns, name=None, url=None):
@@ -103,7 +120,9 @@ def command_check(args):
 
 
 def command_run(args):
-    store, campaigns = load_campaigns()
+    campaign_service, store = load_campaigns()
+    campaigns = campaign_service.campaigns
+    apply_proxy_settings(store, disabled=args.no_proxy)
     campaign = pick_campaign(campaigns, args.campaign, args.url)
     if campaign is None:
         print("Không tìm thấy chiến dịch '%s'. Các chiến dịch đang có:" % args.campaign)
@@ -120,7 +139,8 @@ def command_run(args):
             if record is None:
                 print("Không có %s trong %s" % (email, args.accounts_file))
                 return 2
-            targets.append((record.get("email", email), record.get("password", "")))
+            targets.append((record.get("email", email), record.get("password", ""),
+                            record.get("token", "")))
     elif args.email:
         password = args.password
         if password is None:
@@ -129,16 +149,19 @@ def command_run(args):
                 print("Không có %s trong %s; cần --password." % (args.email, args.accounts_file))
                 return 2
             password = record.get("password", "")
-        targets = [(args.email, password)]
+        record = find_account(accounts, args.email) or {}
+        targets = [(args.email, password, record.get("token", ""))]
     else:
-        targets = [(account.get("email", ""), account.get("password", ""))
+        targets = [(account.get("email", ""), account.get("password", ""),
+                    account.get("token", ""))
                    for account in accounts if account.get("email")]
     if not targets:
         print("Không có tài khoản nào để chạy.")
         return 2
 
-    service = BrowserCampaignService(store, recipe_path=args.recipe, submit=args.submit,
-                                    headless=args.headless, parallel=args.parallel)
+    service = BrowserCampaignService(campaign_service, recipe_path=args.recipe,
+                                    submit=args.submit, headless=args.headless,
+                                    parallel=args.parallel)
     ok, message = service.preflight()
     if not ok:
         print(message)

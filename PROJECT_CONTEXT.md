@@ -145,7 +145,19 @@ trang có modal `#ITEM_SERIAL_CODE_MODAL` + nút `a.js_serial-check-btn`
 (シリアルコードを送信), lỗi hiện ở `#ITEM_SERIAL_CHECK_MODAL_ERROR_MESSAGE`. Serial lấy từ
 trường **`token`** của tài khoản (`email|password|token`) và được truyền vào recipe qua
 `{token}` (context của `render_value`); tài khoản không có token thì các bước đó tự bỏ qua
-(`"when": "{token}"`).
+(`"when": "{token}"`). Chiến dịch 熊本店 抽選 hiện **không** cần serial (đã bỏ các bước đó).
+
+Hai lỗi site hay gặp khi thêm giỏ:
+- 「景品ミニゲームの商品コードが指定されていません」 = **chưa chọn 種類 (ngày/giờ nhận)**;
+  runner báo kèm giải thích này thay vì chờ timeout.
+- 「カート内の商品数とカートに入れる商品数の合計が 1 以下でないためカート追加できません」
+  = **giỏ đã có sản phẩm**. Không phải lỗi: runner bỏ qua bước thêm, vào thẳng trang giỏ
+  rồi chạy tiếp (`_CartAlreadyFull`, bỏ luôn bước bấm 購入手続き).
+
+**Site chặn theo IP** (`ご利用中のIPアドレスからのアクセスが制限されています`): mọi lần chạy
+(CLI lẫn app) phải bật proxy — `browser_campaign.py` giờ đọc `proxy_enabled`/`proxy_mode`/
+`proxy_file` từ `web_settings.json` như API. Trang chiến dịch trả 403 không còn bị coi là
+"đã đăng nhập" (trước đó bỏ qua login rồi chết ở trang item).
 
 Khi bước `select` không chọn được (mã 種類 không có trong trang), runner dừng ngay và báo
 **danh sách mã trang đang có**; popup lỗi của site (vd
