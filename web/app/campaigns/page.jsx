@@ -36,10 +36,12 @@ export default function CampaignsPage() {
   const [signups, setSignups] = useState([])
   const [runEmails, setRunEmails] = useState([])
   const [groupFilter, setGroupFilter] = useState('')
-  // Ngày nhận hàng (slot) chọn bằng ô ngày + giờ; mã gửi lên site được ghép từ đó
-  // (hoặc dán tay khi site đổi mã khác dạng). Để trống = dùng mã mặc định trong recipe.
+  // Ngày nhận hàng (slot) chọn bằng ô ngày + khung giờ; chế độ "ngẫu nhiên" thì mỗi
+  // tài khoản nhận một khung giờ khác nhau (chia đều) thay vì cả loạt cùng một giờ.
+  const [slotMode, setSlotMode] = useState('fixed')
   const [slotDate, setSlotDate] = useState('')
   const [slotTime, setSlotTime] = useState('11:00')
+  const [slotTimes, setSlotTimes] = useState(SLOT_TIMES)
   const [slotCode, setSlotCode] = useState('')
   // Mặc định BẬT: chạy là chốt đơn thật. Tắt khi chỉ muốn điền form rồi tự kiểm tra.
   const [submitEnabled, setSubmitEnabled] = useState(true)
@@ -130,6 +132,10 @@ export default function CampaignsPage() {
       setMessage('Chọn một chiến dịch trong bảng trước')
       return
     }
+    if (slotMode === 'random' && (!slotDate || slotTimes.length === 0)) {
+      setMessage('Chế độ ngẫu nhiên cần ngày nhận và ít nhất một khung giờ')
+      return
+    }
     const targets = runEmails.length
       ? runEmails
       : visibleAccounts
@@ -144,7 +150,11 @@ export default function CampaignsPage() {
         campaign_row: selectedRow,
         emails: targets,
         submit: submitEnabled,
-        slot: slotValue,
+        slot: slotMode === 'fixed' ? slotValue : '',
+        slot_random: slotMode === 'random',
+        slot_item: SLOT_ITEM,
+        slot_date: slotDate,
+        slot_times: slotMode === 'random' ? slotTimes : [],
         use_account_address: useAccountAddress,
         clear_cart: clearCart,
         use_proxy: useProxy,
@@ -202,6 +212,11 @@ export default function CampaignsPage() {
                   <Flex key={item.email} sx={{ gap: 2, fontSize: 1, py: '2px' }}>
                     <StatusBadge status={item.status || (item.ok ? 'ok' : 'error')} />
                     <Text sx={{ minWidth: 200 }}>{item.email}</Text>
+                  {item.slot && (
+                    <Text sx={{ color: 'muted', fontSize: 0 }}>
+                      {item.slot.split('_').slice(1, 3).join(' ')}
+                    </Text>
+                  )}
                     <Text sx={{ color: 'muted', flex: 1 }}>{item.message}</Text>
                     {item.proxy && <Text sx={{ color: 'muted', fontSize: 0 }}>{item.proxy}</Text>}
                   </Flex>
@@ -321,6 +336,14 @@ export default function CampaignsPage() {
               <Text sx={{ display: 'block', fontSize: 1, color: 'muted', mb: 1 }}>
                 Ngày nhận hàng
               </Text>
+              <Select
+                value={slotMode}
+                onChange={(event) => setSlotMode(event.target.value)}
+                sx={{ mb: 2 }}
+              >
+                <option value="fixed">Giờ cố định — mọi tài khoản cùng giờ</option>
+                <option value="random">Giờ ngẫu nhiên — mỗi tài khoản một giờ</option>
+              </Select>
               <Flex sx={{ gap: 2, mb: 1 }}>
                 <Input
                   type="date"
@@ -328,28 +351,68 @@ export default function CampaignsPage() {
                   onChange={(event) => setSlotDate(event.target.value)}
                   sx={{ flex: 1 }}
                 />
-                <Select
-                  value={slotTime}
-                  onChange={(event) => setSlotTime(event.target.value)}
-                  disabled={!slotDate}
-                  sx={{ maxWidth: 108 }}
-                  title="Khung giờ nhận tại cửa hàng"
-                >
-                  {SLOT_TIMES.map((time) => (
-                    <option key={time} value={time}>{time}</option>
-                  ))}
-                </Select>
+                {slotMode === 'fixed' && (
+                  <Select
+                    value={slotTime}
+                    onChange={(event) => setSlotTime(event.target.value)}
+                    disabled={!slotDate}
+                    sx={{ maxWidth: 108 }}
+                    title="Khung giờ nhận tại cửa hàng"
+                  >
+                    {SLOT_TIMES.map((time) => (
+                      <option key={time} value={time}>{time}</option>
+                    ))}
+                  </Select>
+                )}
               </Flex>
+              {slotMode === 'random' && (
+                <Box sx={{ border: '1px solid', borderColor: 'border', borderRadius: 'small', p: 2, mb: 1 }}>
+                  <Flex sx={{ alignItems: 'center', gap: 2, mb: 1 }}>
+                    <Text sx={{ flex: 1, fontSize: 1, color: 'muted' }}>
+                      Khung giờ được phép ({slotTimes.length})
+                    </Text>
+                    <Button
+                      variant="ghost"
+                      sx={{ fontSize: 1, px: 1, py: 0 }}
+                      onClick={() => setSlotTimes(slotTimes.length === SLOT_TIMES.length ? [] : SLOT_TIMES)}
+                    >
+                      {slotTimes.length === SLOT_TIMES.length ? 'Bỏ chọn' : 'Chọn tất cả'}
+                    </Button>
+                  </Flex>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                    {SLOT_TIMES.map((time) => (
+                      <label
+                        key={time}
+                        style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={slotTimes.includes(time)}
+                          onChange={() => setSlotTimes((current) =>
+                            current.includes(time)
+                              ? current.filter((item) => item !== time)
+                              : [...current, time])}
+                        />
+                        {time}
+                      </label>
+                    ))}
+                  </Box>
+                </Box>
+              )}
               <Text sx={{ display: 'block', fontSize: 0, color: 'muted', mb: 2 }}>
-                Mã slot: {slotValue || `mặc định trong recipe (${SLOT_RECIPE_DEFAULT})`}
+                {slotMode === 'random'
+                  ? `Mỗi tài khoản nhận 1 trong ${slotTimes.length} khung giờ, chia đều ngẫu nhiên`
+                  : `Mã slot: ${slotValue || `mặc định trong recipe (${SLOT_RECIPE_DEFAULT})`}`}
               </Text>
-              <TextField
-                label="Mã slot khác"
-                value={slotCode}
-                onChange={(event) => setSlotCode(event.target.value)}
-                placeholder="Để trống = dùng mã ghép từ ngày/giờ ở trên"
-                hint="Chỉ điền khi site đổi mã; xoá trắng để quay lại mã tự ghép."
-              />
+              {slotMode === 'fixed' && (
+                <TextField
+                  label="Mã slot khác"
+                  value={slotCode}
+                  onChange={(event) => setSlotCode(event.target.value)}
+                  placeholder="Để trống = dùng mã ghép từ ngày/giờ ở trên"
+                  hint="Chỉ điền khi site đổi mã; xoá trắng để quay lại mã tự ghép."
+                />
+              )}
               <CheckField
                 label="Dùng địa chỉ riêng của từng tài khoản"
                 checked={useAccountAddress}

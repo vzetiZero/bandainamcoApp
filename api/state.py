@@ -3,6 +3,7 @@
 Một tiến trình API giữ đúng một `ApiState`; mọi router lấy từ đây. Nghiệp vụ vẫn
 gọi service/domain trong `app/` — không có logic mới ở tầng này.
 """
+import copy
 import os
 import threading
 import uuid
@@ -18,6 +19,7 @@ from app.config import (
     MAX_CONCURRENCY, SETTINGS_FILE, WEB_SETTINGS_FILE,
 )
 from app.domain import accounts as accounts_domain
+from app.domain import campaign_slot
 from app.domain import checkout as checkout_domain
 from app.infrastructure.account_repository import AccountRepository
 from app.infrastructure.bandai_auth import BandaiAuthClient
@@ -39,6 +41,8 @@ LOG_LEVELS = ("info", "warn", "error", "ok")
 # Tên nhóm tài khoản lưu trong web_settings.json của từng máy (nhóm gắn với bộ tài
 # khoản riêng của máy, không dùng chung như campaigns.json).
 ACCOUNT_GROUPS_KEY = "account_groups"
+# Ô chọn 種類 (ngày/giờ nhận) trong recipe — nơi ghi mã slot của từng tài khoản.
+SLOT_SELECTOR = "#PRIORITY_ITEMPROPERTY_CD_MATRIX_0"
 
 
 # ============================================================
@@ -487,8 +491,15 @@ class ApiState:
     # JOB: chạy chiến dịch bằng Chrome
     # ============================================================
     def start_browser_run(self, campaign, emails, submit=None, slot="", url_override="",
-                          use_account_address=False, clear_cart=False, use_proxy=None):
-        """`campaign` là dict có name/url (dựng từ UI); emails lấy mật khẩu trong kho."""
+                          use_account_address=False, clear_cart=False, use_proxy=None,
+                          slot_random=False, slot_item=campaign_slot.SLOT_ITEM_DEFAULT,
+                          slot_date="", slot_times=None):
+        """`campaign` là dict có name/url (dựng từ UI); emails lấy mật khẩu trong kho.
+
+        Slot ngày/giờ nhận: `slot` = mã cố định cho mọi tài khoản; `slot_random=True`
+        thì mỗi tài khoản nhận một khung giờ ngẫu nhiên (chia đều) trong `slot_times`
+        của ngày `slot_date` — xem `app/domain/campaign_slot.py`.
+        """
         targets = []
         for email in emails:
             account = self.accounts.find(email)
@@ -497,15 +508,40 @@ class ApiState:
         campaign = dict(campaign or {})
         if url_override:
             campaign["url"] = url_override
+
+        # Mỗi tài khoản một slot (hoặc cùng một mã nếu người dùng chọn cố định).
+        slots = campaign_slot.plan_slots([email for email, _password in targets],
+                                         fixed="" if slot_random else slot,
+                                         item=slot_item, date_text=slot_date,
+                                         times=slot_times or ())
         recipe = None
-        if slot:
-            try:
-                recipe = self.browser.load_recipe()
-                for step in recipe.get("entry", {}).get("steps", []):
-                    if step.get("selector") == "#PRIORITY_ITEMPROPERTY_CD_MATRIX_0":
-                        step["value"] = slot
-            except Exception:  # noqa: BLE001 - preflight bên dưới sẽ báo lỗi rõ
-                recipe = None
+        recipe_cache = {}
+
+        def recipe_for(email):
+            """Recipe đã đổi bước chọn 種類 theo slot của riêng tài khoản này."""
+            code = slots.get(email) or ""
+            if not code:
+                return self.browser.load_recipe()
+            if code not in recipe_cache:
+                prepared = copy.deepcopy(self.browser.load_recipe())
+                for step in prepared.get("entry", {}).get("steps", []):
+                    if step.get("selector") == SLOT_SELECTOR:
+                        step["value"] = code
+                recipe_cache[code] = prepared
+            return recipe_cache[code]
+
+        if slots:
+            fixed_codes = set(slots.values())
+            if len(fixed_codes) == 1:
+                code = next(iter(fixed_codes))
+                try:
+                    recipe = recipe_for(next(iter(slots)))
+                except Exception:  # noqa: BLE001 - preflight phía dưới báo lỗi rõ
+                    recipe = None
+                self.log("Giờ nhận: mọi tài khoản dùng %s" % code)
+            else:
+                self.log("Giờ nhận: chia ngẫu nhiên cho %d tài khoản — %s"
+                         % (len(slots), campaign_slot.describe_plan(slots)))
         self.apply_browser_settings()
         total = len(targets)
 
@@ -529,13 +565,15 @@ class ApiState:
                                   "message": result.message, "status": result.status,
                                   "screenshot": result.screenshot,
                                   "url": result.final_url,
-                                  "proxy": result.details.get("proxy", "")})
+                                  "proxy": result.details.get("proxy", ""),
+                                  "slot": slots.get(result.email, "")})
                 job.done += 1
 
             results = self.browser.run(
                 campaign, targets, on_log=lambda message: self.logs.add(message),
                 on_result=on_result, should_stop=lambda: job._stop,
-                submit=submit, recipe=recipe, profile_for=profile_for,
+                submit=submit, recipe=recipe, recipe_for=recipe_for,
+                profile_for=profile_for,
                 clear_cart=clear_cart, use_proxy=use_proxy)
             ok_count = sum(1 for result in results if result.ok)
             paused = [result.email for result in results if result.keep_open]

@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.config import API_CORS_ORIGINS, MAX_BROWSER_PARALLEL, MAX_CONCURRENCY
 from app.domain import accounts as accounts_domain
+from app.domain import campaign_slot
 from app.domain import checkout as checkout_domain
 from app.domain.browser_recipe import RecipeNotReady, load_recipe, validate_recipe
 from app.domain.campaigns import (
@@ -502,6 +503,11 @@ def create_app(state: Optional[ApiState] = None) -> FastAPI:
         job = current.start_browser_run(campaign, emails,
                                         submit=payload.get("submit"),
                                         slot=payload.get("slot") or "",
+                                        slot_random=bool(payload.get("slot_random")),
+                                        slot_item=payload.get("slot_item") or
+                                        campaign_slot.SLOT_ITEM_DEFAULT,
+                                        slot_date=payload.get("slot_date") or "",
+                                        slot_times=payload.get("slot_times") or [],
                                         use_account_address=bool(
                                             payload.get("use_account_address")),
                                         clear_cart=bool(payload.get("clear_cart")),

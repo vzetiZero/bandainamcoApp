@@ -77,14 +77,16 @@ class BrowserCampaignService:
     # ---------------- chạy ----------------
     def run(self, campaign, accounts, on_log=None, on_progress=None, on_result=None,
             should_stop=None, submit=None, keep_open_seconds=0,
-            on_account_progress=None, recipe=None, profile_for=None, clear_cart=False,
-            use_proxy=None):
+            on_account_progress=None, recipe=None, recipe_for=None, profile_for=None,
+            clear_cart=False, use_proxy=None):
         """Chạy cho `accounts` = [(email, password)].
 
         `submit=None` dùng giá trị của service; `on_result(BrowserRunResult)` được
         gọi ngay khi từng tài khoản xong để UI cập nhật dòng của nó;
         `on_account_progress(email, percent)` báo tiến trình của *từng* tài khoản;
         `recipe` để nơi gọi truyền recipe đã sửa (vd: đổi slot ngày/giờ);
+        `recipe_for(email)` trả recipe riêng của tài khoản đó — dùng khi mỗi tài khoản
+        có một slot ngày/giờ khác nhau (rỗng thì dùng `recipe` chung);
         `profile_for(email)` trả biến hồ sơ riêng của tài khoản (địa chỉ khác nhau) —
         giá trị khác rỗng sẽ đè lên hồ sơ dùng chung.
         """
@@ -125,7 +127,9 @@ class BrowserCampaignService:
                 except Exception as exc:  # noqa: BLE001 - thiếu hồ sơ riêng không chặn chạy
                     log("Không lấy được hồ sơ riêng của %s: %s" % (email, exc))
             runner = CampaignBrowserRunner(
-                recipe=recipe, submit=submit, headless=self.headless,
+                # Slot ngày/giờ có thể khác nhau từng tài khoản -> recipe riêng.
+                recipe=(recipe_for(email) if recipe_for else recipe),
+                submit=submit, headless=self.headless,
                 # use_proxy=False: chạy bằng IP máy dù proxy đang bật trong cấu hình.
                 proxy_manager=self.proxy_manager if use_proxy is not False else None,
                 chrome_path=self.chrome_path, on_log=log,

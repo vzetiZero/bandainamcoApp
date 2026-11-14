@@ -14,7 +14,7 @@ Electron window (web/out) ──HTTP/JSON──> api/ (FastAPI) ──> app/serv
 | Thư mục / file | Vai trò |
 |---|---|
 | `api/` | `app.py` (route REST + CORS), `state.py` (wiring, LogBuffer, JobRegistry, các job) |
-| `app/domain/` | quy tắc thuần, không I/O: `accounts`, `campaigns`, `checkout`, `browser_recipe`, `ip_rules`, `login_rules`, `names` |
+| `app/domain/` | quy tắc thuần, không I/O: `accounts`, `campaigns`, `campaign_slot` (mã 種類 + chia giờ), `checkout`, `browser_recipe`, `ip_rules`, `login_rules`, `names` |
 | `app/services/` | use case: `account_service`, `campaign_service`, `browser_campaign_service` |
 | `app/infrastructure/` | adapter: `bandai_auth` (login + handoff + hồ sơ), `bandai_name`, `bandai_profile`, `account_repository`, `file_settings`, `checkout_store`, `web`, `browser/` |
 | `app/infrastructure/browser/` | `browser_session` (Chrome riêng mỗi tài khoản), `campaign_runner` (replay recipe), `mcp_client` (chrome-devtools-mcp), `discovery` (dò trang) |
@@ -129,6 +129,13 @@ Ngày nhận (種類/slot) chọn ở panel "Chạy tự động": ô **ngày** 
 đúng bước `select #PRIORITY_ITEMPROPERTY_CD_MATRIX_0` trong recipe. Để trống ngày = **giữ
 nguyên giá trị trong recipe** (`159016_1121_1100_1` = 21/11 11:00). Ô "Mã slot khác" để dán
 mã khi site đổi dạng.
+
+Hai chế độ giờ nhận (`app/domain/campaign_slot.py`):
+- **Cố định**: mọi tài khoản dùng cùng một mã slot (như trước).
+- **Ngẫu nhiên**: mỗi tài khoản một khung giờ, chia **đều** giữa các khung được tick
+  (`plan_slots()` xáo trộn rồi lặp vòng) — recipe được nhân bản cho từng mã slot
+  (`recipe_for(email)` trong `BrowserCampaignService.run`), nên không phải sửa recipe
+  dùng chung; kết quả job ghi kèm slot của từng tài khoản.
 
 ## 5. Trình duyệt (Playwright + chrome-devtools-mcp)
 

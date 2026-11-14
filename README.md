@@ -13,7 +13,9 @@ in a real Chrome window per account.
   in it right away; the campaign run panel can pick a group in one click. Groups live with the
   accounts of that machine (`accounts_data.json` + `web_settings.json`).
 - **Campaigns**: one row per campaign with `open`/`close` dates; status and countdown are derived,
-  not typed. Registrations per campaign, plus a run panel.
+  not typed. Registrations per campaign, plus a run panel. The pickup slot is picked from a
+  calendar, either fixed for the whole batch or randomised per account (spread evenly across the
+  allowed time slots).
 - **Browser automation**: one Chrome per account (own profile, own proxy, own debug port), driven
   by a JSON *recipe*; it can walk to the payment page and stop (`pause`) or press submit.
   `chrome-devtools-mcp` attaches to the same window for page discovery and snapshots.
