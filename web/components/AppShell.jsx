@@ -14,6 +14,10 @@ const NAV = [
   { href: '/settings', label: 'Cấu hình' },
 ]
 
+// Trang có bảng dài (tài khoản, chiến dịch) dùng hết chiều ngang cửa sổ; trang
+// còn lại giữ bề ngang đọc thoải mái.
+const WIDE_ROUTES = ['/accounts', '/campaigns']
+
 const LOG_TONE = { info: 'text', ok: 'ok', warn: 'warn', error: 'error' }
 
 export default function AppShell({ children }) {
@@ -39,6 +43,7 @@ export default function AppShell({ children }) {
 
   const apiDown = Boolean(health.error)
   const summary = health.data
+  const wide = WIDE_ROUTES.some((route) => pathname.startsWith(route))
 
   return (
     <Flex sx={{ minHeight: '100vh' }}>
@@ -120,7 +125,13 @@ export default function AppShell({ children }) {
             thư mục dự án.
           </Box>
         )}
-        <Box sx={{ p: 4, maxWidth: 'content', width: '100%', mx: 'auto', flex: 1 }}>
+        <Box
+          sx={{
+            p: 4, width: '100%', mx: 'auto', flex: 1, minHeight: 0,
+            display: 'flex', flexDirection: 'column',
+            maxWidth: wide ? '100%' : 'content',
+          }}
+        >
           {children}
         </Box>
 

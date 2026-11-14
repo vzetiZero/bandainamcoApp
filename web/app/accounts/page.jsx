@@ -167,7 +167,7 @@ export default function AccountsPage() {
   }, [job])
 
   return (
-    <Box>
+    <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <Flex sx={{ alignItems: 'flex-end', mb: 4, gap: 3, flexWrap: 'wrap' }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Text as="h1" sx={{ fontSize: 6, fontWeight: 'bold' }}>Tài khoản</Text>
@@ -199,6 +199,8 @@ export default function AccountsPage() {
           gridTemplateColumns: [null, null, 'minmax(0, 1fr) 320px'],
           gap: 3,
           alignItems: 'start',
+          flex: 1,
+          minHeight: 0,
         }}
       >
         <Box sx={{ minWidth: 0 }}>
@@ -287,17 +289,17 @@ export default function AccountsPage() {
             </Flex>
 
             <ScrollTable
-              maxHeight="min(58vh, 620px)"
+              maxHeight="max(260px, calc(100vh - 340px))"
               sx={{ '& table': { tableLayout: 'fixed' } }}
             >
               <thead>
                 <tr>
                   <th style={{ width: 34 }} />
-                  <th>Email</th>
-                  <th style={{ width: 110 }}>Nhóm</th>
+                  <th style={{ width: '34%' }}>Email</th>
+                  <th style={{ width: 120 }}>Nhóm</th>
                   <th style={{ width: 110 }}>Trạng thái</th>
-                  <th style={{ width: 120 }}>Kiểm tra gần nhất</th>
-                  <th>Tên (hồ sơ)</th>
+                  <th style={{ width: 130 }}>Kiểm tra gần nhất</th>
+                  <th style={{ width: '20%' }}>Tên (hồ sơ)</th>
                   <th style={{ width: 84 }} />
                 </tr>
               </thead>

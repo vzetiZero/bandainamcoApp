@@ -124,6 +124,12 @@ CSS id (`.` = class) — dùng `input[name="ORDER_H.FREE_ITEM12"]`. Checkbox 「
 `input[name="ORDER_H.FREE_ITEM22"]`, ô ビル名 là `input[name="ADDR3"]`.
 Kết quả thật 2026-11-14 (qua proxy): trinha5 → ご注文完了, 注文番号 EC-2108582488.
 
+Ngày nhận (種類/slot) chọn ở panel "Chạy tự động": ô **ngày** + khung **giờ** → UI ghép mã
+`159016_<MMDD>_<HHMM>_1` gửi lên `POST /api/browser/run`; `ApiState.start_browser_run` thay
+đúng bước `select #PRIORITY_ITEMPROPERTY_CD_MATRIX_0` trong recipe. Để trống ngày = **giữ
+nguyên giá trị trong recipe** (`159016_1121_1100_1` = 21/11 11:00). Ô "Mã slot khác" để dán
+mã khi site đổi dạng.
+
 ## 5. Trình duyệt (Playwright + chrome-devtools-mcp)
 
 - Mỗi tài khoản: profile riêng `browser_profiles/<slug email>`, `--remote-debugging-port` riêng,
@@ -200,7 +206,8 @@ python server.py --help    # --port, --kill-port/--no-kill-port, --pick-port
 2. Mọi network call qua `new_session()` (để dùng proxy); `USER_AGENT` là nguồn duy nhất cho header.
 3. Không commit secret (`accounts_data.json`, `proxy.txt`, `checkout_profile.json`).
 4. Selector nằm trong `recipes/*.json`; đổi site thì sửa dữ liệu, không hard-code.
-5. `submit` mặc định phải qua xác nhận của người dùng; recipe hiện dừng ở `pause` trước khi chốt đơn.
+5. UI **mặc định BẬT "Tự bấm gửi"** (chốt đơn thật, không huỷ được) — tắt ô đó khi chỉ muốn
+   điền form rồi tự kiểm tra; với `submit=false` recipe dừng ở `pause` trước 注文する.
 6. API không trả mật khẩu/thẻ/CVV; log chỉ in `checkout.summary()` (đã che).
 7. UI gọn: giải thích đặt ở tooltip, nhãn trạng thái 1 dòng, kết quả dùng toast/status chứ không popup.
 

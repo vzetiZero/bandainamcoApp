@@ -9,6 +9,11 @@ import { useJob, usePoll } from '@/lib/hooks'
 const BLANK = { name: '', url: '', opens_at: '', closes_at: '', notes: '' }
 // Khớp GROUP_UNGROUPED của backend: lọc tài khoản chưa vào nhóm nào.
 const NO_GROUP = '__none__'
+// Mã 種類 của Parks2 dạng `<mã_hàng>_<MMDD>_<HHMM>_1`; giờ nhận chỉ có các khung cố
+// định, nên chọn giờ trong danh sách còn mã khác thì dán tay ở ô "Mã slot khác".
+const SLOT_ITEM = '159016'
+const SLOT_TIMES = ['11:00', '11:30', '12:00', '13:30', '16:00', '18:30']
+const SLOT_RECIPE_DEFAULT = '159016_1121_1100_1'
 
 // Ô chọn ngày/giờ của trình duyệt dùng dạng "YYYY-MM-DDTHH:MM", còn API lưu
 // "YYYY-MM-DD HH:MM" — đổi qua lại ở đây để form luôn hiện đúng giá trị đã lưu.
@@ -31,8 +36,13 @@ export default function CampaignsPage() {
   const [signups, setSignups] = useState([])
   const [runEmails, setRunEmails] = useState([])
   const [groupFilter, setGroupFilter] = useState('')
-  const [slot, setSlot] = useState('')
-  const [submitEnabled, setSubmitEnabled] = useState(false)
+  // Ngày nhận hàng (slot) chọn bằng ô ngày + giờ; mã gửi lên site được ghép từ đó
+  // (hoặc dán tay khi site đổi mã khác dạng). Để trống = dùng mã mặc định trong recipe.
+  const [slotDate, setSlotDate] = useState('')
+  const [slotTime, setSlotTime] = useState('11:00')
+  const [slotCode, setSlotCode] = useState('')
+  // Mặc định BẬT: chạy là chốt đơn thật. Tắt khi chỉ muốn điền form rồi tự kiểm tra.
+  const [submitEnabled, setSubmitEnabled] = useState(true)
   const [useAccountAddress, setUseAccountAddress] = useState(true)
   const [clearCart, setClearCart] = useState(false)
   const [useProxy, setUseProxy] = useState(true)
@@ -134,7 +144,7 @@ export default function CampaignsPage() {
         campaign_row: selectedRow,
         emails: targets,
         submit: submitEnabled,
-        slot,
+        slot: slotValue,
         use_account_address: useAccountAddress,
         clear_cart: clearCart,
         use_proxy: useProxy,
@@ -151,18 +161,15 @@ export default function CampaignsPage() {
     sessions.reload()
   }
 
-  const slotOptions = useMemo(() => {
-    const dates = ['1121', '1122', '1123', '1124']
-    const times = ['1100', '1330', '1600', '1830']
-    const options = [{ value: '', label: 'Mặc định trong recipe' }]
-    dates.forEach((date) => {
-      times.forEach((time) => {
-        const value = `159016_${date}_${time}_1`
-        options.push({ value, label: `${date.slice(2, 4)}/${date.slice(4, 6)} ${time.slice(0, 2)}:${time.slice(2)}` })
-      })
-    })
-    return options
-  }, [])
+  // Mã slot thực gửi lên: mã dán tay > mã ghép từ ngày/giờ > rỗng (theo recipe).
+  const slotValue = useMemo(() => {
+    const custom = slotCode.trim()
+    if (custom) return custom
+    if (!slotDate) return ''
+    const [, month, day] = slotDate.split('-')
+    if (!month || !day) return ''
+    return `${SLOT_ITEM}_${month}${day}_${slotTime.replace(':', '')}_1`
+  }, [slotCode, slotDate, slotTime])
 
   return (
     <Box>
@@ -311,15 +318,38 @@ export default function CampaignsPage() {
         <Box>
           <Panel title="Chạy tự động" subtitle={current ? current.name : 'Chọn một chiến dịch'}>
             <Box sx={{ p: 3 }}>
-              <Select
-                value={slot}
-                onChange={(event) => setSlot(event.target.value)}
-                sx={{ mb: 3 }}
-              >
-                {slotOptions.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </Select>
+              <Text sx={{ display: 'block', fontSize: 1, color: 'muted', mb: 1 }}>
+                Ngày nhận hàng
+              </Text>
+              <Flex sx={{ gap: 2, mb: 1 }}>
+                <Input
+                  type="date"
+                  value={slotDate}
+                  onChange={(event) => setSlotDate(event.target.value)}
+                  sx={{ flex: 1 }}
+                />
+                <Select
+                  value={slotTime}
+                  onChange={(event) => setSlotTime(event.target.value)}
+                  disabled={!slotDate}
+                  sx={{ maxWidth: 108 }}
+                  title="Khung giờ nhận tại cửa hàng"
+                >
+                  {SLOT_TIMES.map((time) => (
+                    <option key={time} value={time}>{time}</option>
+                  ))}
+                </Select>
+              </Flex>
+              <Text sx={{ display: 'block', fontSize: 0, color: 'muted', mb: 2 }}>
+                Mã slot: {slotValue || `mặc định trong recipe (${SLOT_RECIPE_DEFAULT})`}
+              </Text>
+              <TextField
+                label="Mã slot khác"
+                value={slotCode}
+                onChange={(event) => setSlotCode(event.target.value)}
+                placeholder="Để trống = dùng mã ghép từ ngày/giờ ở trên"
+                hint="Chỉ điền khi site đổi mã; xoá trắng để quay lại mã tự ghép."
+              />
               <CheckField
                 label="Dùng địa chỉ riêng của từng tài khoản"
                 checked={useAccountAddress}
@@ -342,7 +372,7 @@ export default function CampaignsPage() {
                 label="Tự bấm gửi (chốt đơn thật)"
                 checked={submitEnabled}
                 onChange={(event) => setSubmitEnabled(event.target.checked)}
-                hint="BẬT = app bấm 入力内容を確認する → 注文する: đơn 抽選 được gửi thật, không huỷ được. TẮT = dừng ở trang ご注文情報入力 để bạn tự kiểm tra."
+                hint="Mặc định BẬT: app bấm 入力内容を確認する → 注文する, đơn 抽選 được gửi thật và không huỷ được. TẮT nếu chỉ muốn dừng ở trang ご注文情報入力 để tự kiểm tra."
               />
               <Flex sx={{ gap: 2, alignItems: 'center', mb: 2 }}>
                 <Text sx={{ flex: 1, fontSize: 1, color: 'muted' }}>
