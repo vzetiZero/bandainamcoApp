@@ -31,17 +31,23 @@ class AccountService:
         return True
 
     def add_lines(self, lines: Iterable[str]):
-        """Thêm một khối dòng `email|password|token`; trả số dòng thêm được và số trùng."""
+        """Thêm một khối dòng `email|password|token`.
+
+        Trả `added`, `skipped` và `added_emails` (danh sách email vừa thêm, để nơi
+        gọi xếp chúng vào nhóm ngay khi nhập).
+        """
         added = skipped = 0
+        added_emails = []
         for line in lines:
             account = parse_account_line(line)
             if account is None:
                 continue
             if self.add(account["email"], account["password"], account.get("token")):
                 added += 1
+                added_emails.append(account["email"])
             else:
                 skipped += 1
-        return {"added": added, "skipped": skipped}
+        return {"added": added, "skipped": skipped, "added_emails": added_emails}
 
     def preview(self, lines: Iterable[str]):
         return preview_lines(list(lines), {account["email"] for account in self.accounts})

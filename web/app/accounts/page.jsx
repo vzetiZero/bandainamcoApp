@@ -30,6 +30,8 @@ export default function AccountsPage() {
   const [targetGroup, setTargetGroup] = useState('')
   const [freshGroup, setFreshGroup] = useState('')
   const [groupDraft, setGroupDraft] = useState('')
+  const [importGroup, setImportGroup] = useState('')
+  const [importFreshGroup, setImportFreshGroup] = useState('')
 
   const list = usePoll(
     `/api/accounts?query=${encodeURIComponent(query)}&status=${encodeURIComponent(status)}`
@@ -63,10 +65,20 @@ export default function AccountsPage() {
   }, [selected, track])
 
   const doImport = async () => {
+    // Nhóm chọn sẵn cho các tài khoản vừa dán: gán ngay khi thêm, khỏi phải tick lại.
+    const group = importGroup === NEW_GROUP ? importFreshGroup.trim() : importGroup
+    if (importGroup === NEW_GROUP && !group) {
+      setMessage('Đặt tên cho nhóm mới trước khi thêm')
+      return
+    }
     try {
-      const result = await post('/api/accounts/import', { text: importText })
-      setMessage(`Đã thêm ${result.added}, bỏ qua ${result.skipped}`)
+      const result = await post('/api/accounts/import', { text: importText, group })
+      setMessage(result.group
+        ? `Đã thêm ${result.added} tài khoản vào nhóm “${result.group}” (bỏ qua ${result.skipped})`
+        : `Đã thêm ${result.added}, bỏ qua ${result.skipped}`)
       setImportText('')
+      setImportFreshGroup('')
+      if (group) setGroupFilter(group)   // hiện ngay nhóm vừa thêm
       list.reload()
     } catch (err) {
       setMessage(err.message)
@@ -402,6 +414,28 @@ export default function AccountsPage() {
 
           <Panel title="Thêm tài khoản" subtitle="Mỗi dòng: email|password|token">
             <Box sx={{ p: 3 }}>
+              <Text sx={{ display: 'block', fontSize: 1, color: 'muted', mb: 1 }}>
+                Nhóm cho tài khoản sắp thêm
+              </Text>
+              <Select
+                value={importGroup}
+                onChange={(event) => setImportGroup(event.target.value)}
+                sx={{ mb: 2 }}
+              >
+                <option value="">— Không vào nhóm —</option>
+                {groups.map((group) => (
+                  <option key={group.name} value={group.name}>{group.name}</option>
+                ))}
+                <option value={NEW_GROUP}>+ Nhóm mới…</option>
+              </Select>
+              {importGroup === NEW_GROUP && (
+                <Input
+                  placeholder="Tên nhóm mới"
+                  value={importFreshGroup}
+                  onChange={(event) => setImportFreshGroup(event.target.value)}
+                  sx={{ mb: 2 }}
+                />
+              )}
               <Box
                 as="textarea"
                 rows={6}

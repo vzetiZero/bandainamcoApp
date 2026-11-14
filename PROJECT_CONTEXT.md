@@ -54,6 +54,9 @@ Electron window (web/out) ──HTTP/JSON──> api/ (FastAPI) ──> app/serv
   `DELETE /api/accounts/groups/{name}` (xoá nhóm — tài khoản vẫn còn, chỉ bỏ nhóm),
   `POST /api/accounts/group` (gán `{emails, group}`, `group: ""` = bỏ nhóm),
   `GET /api/accounts?group=<tên|__none__>` để lọc.
+- Thêm tài khoản kèm nhóm ngay: `POST /api/accounts/import {text, group}` và
+  `POST /api/accounts {email, password, group}` — chỉ tài khoản **mới thêm** được gán
+  nhóm (dòng trùng giữ nhóm cũ), nhóm chưa có thì tự tạo.
 
 ## 3. Chiến dịch
 

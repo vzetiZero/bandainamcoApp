@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.config import API_CORS_ORIGINS, MAX_BROWSER_PARALLEL, MAX_CONCURRENCY
+from app.domain import accounts as accounts_domain
 from app.domain import checkout as checkout_domain
 from app.domain.browser_recipe import RecipeNotReady, load_recipe, validate_recipe
 from app.domain.campaigns import (
@@ -107,7 +108,11 @@ def create_app(state: Optional[ApiState] = None) -> FastAPI:
             raise HTTPException(400, "Cần email và password")
         if not current.accounts.add(email, password, payload.get("token")):
             raise HTTPException(409, "Tài khoản %s đã có trong danh sách" % email)
-        current.save_accounts()
+        group = accounts_domain.normalize_group(payload.get("group") or "")
+        if group:
+            current.assign_accounts_group([email], group)   # lưu accounts + tên nhóm
+        else:
+            current.save_accounts()
         return current.account_public(current.accounts.find(email))
 
     @api.post("/api/accounts/preview")
@@ -117,10 +122,18 @@ def create_app(state: Optional[ApiState] = None) -> FastAPI:
 
     @api.post("/api/accounts/import")
     def accounts_import(payload: dict = Body(...)):
+        """Dán danh sách `email|password|token`; `group` để xếp luôn vào một nhóm."""
         current = st()
         lines = (payload.get("text") or "").splitlines()
+        group = accounts_domain.normalize_group(payload.get("group") or "")
         result = current.accounts.add_lines(lines)
-        current.save_accounts()
+        added_emails = result.pop("added_emails", [])
+        if group and added_emails:
+            # assign_accounts_group tự lưu accounts + tên nhóm (tạo nhóm nếu chưa có).
+            current.assign_accounts_group(added_emails, group)
+            result["group"] = group
+        else:
+            current.save_accounts()
         return result
 
     @api.delete("/api/accounts")

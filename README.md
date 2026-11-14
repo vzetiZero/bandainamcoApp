@@ -8,9 +8,10 @@ in a real Chrome window per account.
 
 - **Accounts**: import `email|password|token` lines, search/filter, status badges, per-account
   progress, batch login checks (1–10 parallel), profile fields, kanji rename, delete, export.
-- **Account groups**: create/rename-free group labels, filter the list by group, move the selected
-  accounts into a group (or out of it); the campaign run panel can pick a group in one click.
-  Groups live with the accounts of that machine (`accounts_data.json` + `web_settings.json`).
+- **Account groups**: create group labels, filter the list by group, move the selected accounts
+  into a group (or out of it), and pick a group in the "add accounts" box so pasted accounts land
+  in it right away; the campaign run panel can pick a group in one click. Groups live with the
+  accounts of that machine (`accounts_data.json` + `web_settings.json`).
 - **Campaigns**: one row per campaign with `open`/`close` dates; status and countdown are derived,
   not typed. Registrations per campaign, plus a run panel.
 - **Browser automation**: one Chrome per account (own profile, own proxy, own debug port), driven
