@@ -429,7 +429,9 @@ def create_app(state: Optional[ApiState] = None) -> FastAPI:
                                         submit=payload.get("submit"),
                                         slot=payload.get("slot") or "",
                                         use_account_address=bool(
-                                            payload.get("use_account_address")))
+                                            payload.get("use_account_address")),
+                                        clear_cart=bool(payload.get("clear_cart")),
+                                        use_proxy=payload.get("use_proxy"))
         return job.as_dict()
 
     @api.get("/api/browser/sessions")

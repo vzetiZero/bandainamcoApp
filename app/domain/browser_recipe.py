@@ -1,4 +1,4 @@
-"""Recipe thao tác trình duyệt cho chiến dịch 抽選 — quy tắc thuần, không Qt/network.
+﻿"""Recipe thao tác trình duyệt cho chiến dịch 抽選 — quy tắc thuần, không Qt/network.
 
 Recipe là dữ liệu JSON mô tả *các bước* thao tác trên trang, để khi site đổi
 layout chỉ phải sửa file JSON trong `recipes/`, không phải sửa code Python.
@@ -40,12 +40,14 @@ Bước (`steps`) là dict có `action`:
 | `sleep` | `value` (giây) | nghỉ có chủ đích (trang chờ JS) |
 | `screenshot` | `value` (tên file) | chụp ảnh mốc giữa luồng |
 | `dismiss` | `selectors` (danh sách) hoặc `selector`, tuỳ chọn `check` | đóng popup/quảng cáo: nếu có `check` thì tick checkbox đó trước, rồi bấm cái đang hiện (không có thì bỏ qua, không chờ timeout) |
+| `clear_cart` | `value` (URL giỏ), tuỳ chọn `selector` (nút xoá) | xoá các dòng đang có trong giỏ rồi quay lại trang chiến dịch — dùng khi đổi 種類 để không thành 2 dòng |
 | `pause` | — | **dừng tại đây và để cửa sổ Chrome mở** cho người dùng tự làm tiếp (vd: bước thanh toán) |
 | `submit` | — | điểm bấm gửi: **chỉ chạy khi bật submit** |
 
 Mọi bước có thể đặt `"optional": true` để bỏ qua khi phần tử không có (ví dụ
 hộp thoại cookie/đồng ý điều khoản chỉ xuất hiện lần đầu),
 `"requires_submit": true` để chỉ chạy khi người dùng bật submit,
+`"unless_submit": true` để chỉ chạy khi **tắt** submit (vd: bước `pause` giữ cửa sổ lại),
 `"when": "{bien}"` để chỉ chạy khi biến đó có giá trị (rỗng/0/false ⇒ bỏ bước), và
 `"only_if_empty": true` cho `fill`/`select` để KHÔNG ghi đè dữ liệu site đã điền sẵn.
 """
@@ -54,7 +56,7 @@ import re
 
 STEP_ACTIONS = (
     "goto", "fill", "select", "check", "click", "press",
-    "wait_text", "wait_selector", "sleep", "screenshot", "dismiss", "pause", "submit",
+    "wait_text", "wait_selector", "sleep", "screenshot", "dismiss", "clear_cart", "pause", "submit",
 )
 # Trường bắt buộc theo từng action.
 REQUIRED_FIELDS = {
@@ -69,6 +71,7 @@ REQUIRED_FIELDS = {
     "sleep": ("value",),
     "screenshot": ("value",),
     "dismiss": (),
+    "clear_cart": (),
     "pause": (),
     "submit": (),
 }
@@ -136,8 +139,18 @@ def _steps_errors(steps, where):
         when = step.get("when")
         if when is not None and not isinstance(when, str):
             errors.append("%s: 'when' phải là chuỗi (vd \"{zip}\")" % label)
-        if "only_if_empty" in step and not isinstance(step.get("only_if_empty"), bool):
-            errors.append("%s: 'only_if_empty' phải là true/false" % label)
+        for flag in ("requires_submit", "unless_submit"):
+            if flag in step and not isinstance(step.get(flag), bool):
+                errors.append("%s: '%s' phải là true/false" % (label, flag))
+        if "only_if_empty" in step:
+            guard = step.get("only_if_empty")
+            # bool: xét ô của chính nó (fill/select). str: selector ô khác phải TRỐNG (check).
+            if not isinstance(guard, (bool, str)):
+                errors.append("%s: 'only_if_empty' phải là true/false hoặc selector" % label)
+            elif isinstance(guard, str) and not guard.strip():
+                errors.append("%s: 'only_if_empty' là selector rỗng" % label)
+        if step.get("requires_submit") and step.get("unless_submit"):
+            errors.append("%s: 'requires_submit' và 'unless_submit' loại trừ nhau" % label)
         for field, markers in (("selector", SELECTOR_MARKERS), ("value", VALUE_MARKERS)):
             text = step.get(field)
             if isinstance(text, str) and any(mark in text for mark in markers):
@@ -229,3 +242,4 @@ def classify_outcome(recipe, page_text):
         if match_any(page_text, verification_texts(recipe, key)):
             return status
     return ""
+

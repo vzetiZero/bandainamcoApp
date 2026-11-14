@@ -1,4 +1,4 @@
-"""Chạy recipe của chiến dịch trên Chrome riêng của từng tài khoản.
+﻿"""Chạy recipe của chiến dịch trên Chrome riêng của từng tài khoản.
 
 Trách nhiệm: mở phiên, đăng nhập nếu cần, chạy các bước trên trang 抽選, bấm gửi
 (chỉ khi bật submit), phân loại kết quả và chụp ảnh làm bằng chứng. Không biết gì
@@ -57,6 +57,10 @@ class _PauseFlow(Exception):
     """Điều khiển luồng: recipe yêu cầu dừng và để cửa sổ lại cho người dùng."""
 
 
+class _ProxyRetry(Exception):
+    """Proxy lỗi hoặc IP bị chặn: thử lại bằng proxy kế tiếp (nếu còn)."""
+
+
 def _artifacts_dir(email):
     stamp = datetime.now().strftime("%Y%m%d")
     return os.path.join(BROWSER_ARTIFACTS_DIR, stamp)
@@ -73,7 +77,8 @@ class CampaignBrowserRunner:
 
     def __init__(self, recipe, submit=False, headless=False, proxy_manager=None,
                  chrome_path=None, profile_root=BROWSER_PROFILE_DIR,
-                 on_log=None, keep_open_seconds=0, on_keep_open=None, card=None):
+                 on_log=None, keep_open_seconds=0, on_keep_open=None, card=None,
+                 clear_cart=False):
         self.recipe = recipe
         self.submit = bool(submit)
         self.headless = bool(headless)
@@ -86,14 +91,40 @@ class CampaignBrowserRunner:
         self.on_keep_open = on_keep_open or (lambda email, session: None)
         # Biến thẻ thanh toán ({card_number}, {card_exp}...) do UI/Cấu hình cung cấp.
         self.card = card or {}
+        # Xoá dòng giỏ cũ trước khi thêm slot mới (đổi khung giờ mà không bị 2 dòng).
+        self.clear_cart = bool(clear_cart)
+        self.campaign_url = ""
 
     # ---------------- API chính ----------------
     def run(self, email, password, campaign_url, on_progress=None):
         report = on_progress or (lambda percent: None)
+        self.campaign_url = campaign_url or ""
         result = BrowserRunResult(email=email, status=STATUS_ERROR,
                                   message="Chưa chạy bước nào")
+        # Proxy lỗi/chặn IP thì thử proxy kế tiếp (tối đa 2 lần) trước khi bỏ cuộc.
+        attempts = 2 if self.proxy_manager is not None else 1
+        for attempt in range(1, attempts + 1):
+            finished = self._run_once(email, password, campaign_url, result, report,
+                                     attempt, attempts)
+            if finished:
+                return result
+            self._mark_proxy_blocked()
+            self.on_log("[%s] proxy lỗi/bị chặn — thử proxy khác (%d/%d)"
+                        % (email, attempt, attempts))
+        result.status = STATUS_IP_BLOCKED
+        result.message = (
+            "Proxy lỗi hoặc IP bị chặn ở mọi lần thử — thêm proxy khác vào proxy.txt rồi chạy lại"
+            if self._current_proxy else
+            "IP bị site chặn (UnexpectedRemoteAddress) — bật proxy rồi chạy lại")
+        result.screenshot = ""
+        report(100)
+        return result
+
+    def _run_once(self, email, password, campaign_url, result, report, attempt, attempts):
+        """Một lần thử với một proxy. Trả True khi đã có kết luận (không retry)."""
         proxy = self.proxy_manager.next_proxy_entry() if self.proxy_manager else None
         self._current_proxy = proxy
+        result.details["proxy"] = ("%s:%s" % (proxy["host"], proxy["port"])) if proxy else ""
         report(5)
         session = BrowserSession(
             email=email, proxy=proxy, headless=self.headless,
@@ -104,10 +135,18 @@ class CampaignBrowserRunner:
             session.start()
         except BrowserStartError as exc:
             result.message = str(exc)
+            if proxy and attempt < attempts:
+                session.close()
+                return False          # thử lại với proxy khác
             report(100)
-            return result
+            return True
+        retry = False
         try:
             self._run_flow(session, email, password, campaign_url, result, report)
+        except _ProxyRetry:
+            retry = proxy is not None and attempt < attempts
+            if retry:
+                result.message = "Proxy lỗi — đang thử proxy khác"
         except _PauseFlow:
             result.status = STATUS_PAUSED
             result.ok = True
@@ -133,8 +172,10 @@ class CampaignBrowserRunner:
                 if self.keep_open_seconds and not self.headless:
                     session.page.wait_for_timeout(self.keep_open_seconds * 1000)
                 session.close()
+        if retry:
+            return False
         report(100)
-        return result
+        return True
 
     # ---------------- các pha ----------------
     def _run_flow(self, session, email, password, campaign_url, result, report):
@@ -153,12 +194,11 @@ class CampaignBrowserRunner:
         page.wait_for_timeout(800)
         body = session.page_text()
         if is_ip_lockout(body):
-            self._mark_proxy_blocked()
-            result.status = STATUS_IP_BLOCKED
-            result.message = "IP bị site chặn (UnexpectedRemoteAddress) — đổi proxy rồi chạy lại"
-            result.screenshot = session.screenshot(_screenshot_path(email, "ip-blocked"))
-            return
-        if response is not None and response.status >= 400:
+            raise _ProxyRetry("trang chiến dịch chặn IP (UnexpectedRemoteAddress)")
+        if response is None:
+            # Không có response = mạng/proxy hỏng, thử proxy khác.
+            raise _ProxyRetry("không tải được trang chiến dịch")
+        if response.status >= 400:
             raise RecipeNotReady("Trang chiến dịch trả HTTP %d" % response.status)
 
         report(60)
@@ -221,7 +261,9 @@ class CampaignBrowserRunner:
                 self.on_log("[%s] phiên còn đăng nhập, bỏ qua bước login" % email)
                 return True
         self.on_log("[%s] đăng nhập" % email)
-        session.goto(login["url"])
+        response = session.goto(login["url"])
+        if response is None:
+            raise _ProxyRetry("không tải được trang đăng nhập")
         session.page.wait_for_timeout(600)
         self._run_steps(session, phase_steps(recipe, "login"), email, password, result, report)
         if not campaign_url:
@@ -229,8 +271,7 @@ class CampaignBrowserRunner:
         session.goto(campaign_url)
         session.page.wait_for_timeout(900)
         if is_ip_lockout(session.page_text()):
-            self._mark_proxy_blocked()
-            return False
+            raise _ProxyRetry("trang chiến dịch chặn IP sau khi đăng nhập")
         if logged_in_selector or logged_out_selector:
             return looks_logged_in()
         return not self._has(session, login.get("password_selector") or "input[type=password]")
@@ -244,6 +285,11 @@ class CampaignBrowserRunner:
             if step.get("requires_submit") and not self.submit:
                 result.last_step = "%s (bỏ vì chưa bật submit)" % action
                 return True
+            if step.get("unless_submit") and self.submit:
+                # Bước chỉ dành cho chế độ "chỉ điền" (vd: pause giữ cửa sổ lại).
+                self.on_log("[%s] bỏ bước '%s' (đang bật submit)"
+                            % (email, step.get("name") or action))
+                continue
             if action == "submit" and not self.submit:
                 result.last_step = "submit (bỏ vì chưa bật submit)"
                 return True
@@ -272,6 +318,57 @@ class CampaignBrowserRunner:
             report(min(84, 45 + int(35 * (index + 1) / total)))
         return False
 
+    def _clear_cart(self, session, email, url, selector, campaign_url):
+        """Xoá các dòng đang có trong giỏ rồi quay lại trang chiến dịch.
+
+        Cần trước khi chọn slot khác: Parks2 giữ giỏ theo tài khoản, nên nếu không xoá
+        thì đơn sẽ gồm cả dòng cũ (sai khung giờ, và có thể vượt giới hạn 1 vé/người).
+        """
+        page = session.page
+        if not url:
+            self.on_log("[%s] bỏ clear_cart: recipe thiếu URL giỏ hàng" % email)
+            return
+        session.goto(url)
+        page.wait_for_timeout(1200)
+        selector = selector or 'a[onclick*="\'delete\'"]'
+        removed = 0
+
+        def visible_delete():
+            locator = page.locator(selector)
+            for index in range(locator.count()):
+                candidate = locator.nth(index)
+                try:
+                    if candidate.is_visible():
+                        return candidate
+                except Exception:  # noqa: BLE001
+                    continue
+            return None
+
+        # Đếm số dòng cần xoá trước, để không bấm lặp vô ích nếu nút vẫn còn trên trang.
+        pending = 0
+        locator = page.locator(selector)
+        for index in range(locator.count()):
+            try:
+                if locator.nth(index).is_visible():
+                    pending += 1
+            except Exception:  # noqa: BLE001
+                continue
+        for _ in range(max(0, pending)):
+            target = visible_delete()
+            if target is None:
+                break
+            try:
+                target.click(timeout=8000)
+                removed += 1
+                page.wait_for_timeout(1500)
+            except Exception as exc:  # noqa: BLE001
+                self.on_log("[%s] không xoá được dòng giỏ: %s" % (email, exc))
+                break
+        self.on_log("[%s] xoá %d dòng giỏ cũ" % (email, removed))
+        if campaign_url:
+            session.goto(campaign_url)
+            page.wait_for_timeout(1200)
+
     def _click(self, page, selector, timeout):
         """Bấm phần tử ĐANG HIỆN đầu tiên khớp selector.
 
@@ -280,6 +377,8 @@ class CampaignBrowserRunner:
         """
         locator = page.locator(selector)
         count = locator.count()
+        if count == 0:
+            raise RecipeNotReady("Không thấy phần tử %s" % selector)
         for index in range(count):
             candidate = locator.nth(index)
             try:
@@ -296,6 +395,8 @@ class CampaignBrowserRunner:
     def _fill(self, page, selector, value, timeout):
         """Điền cả khi ô nhập bị ẩn (Parks2 có bản mobile ẩn cùng id)."""
         locator = page.locator(selector)
+        if locator.count() == 0:
+            raise RecipeNotReady("Không thấy ô nhập %s" % selector)
         for index in range(locator.count()):
             item = locator.nth(index)
             try:
@@ -313,6 +414,8 @@ class CampaignBrowserRunner:
 
     def _select(self, page, selector, value, timeout):
         locator = page.locator(selector)
+        if locator.count() == 0:
+            raise RecipeNotReady("Không thấy ô chọn %s" % selector)
         for index in range(locator.count()):
             item = locator.nth(index)
             try:
@@ -362,6 +465,11 @@ class CampaignBrowserRunner:
         if action == "goto":
             session.goto(render_value(value, email, password, context))
             page.wait_for_timeout(int(step.get("settle") or 500))
+        elif action == "clear_cart":
+            if not self.clear_cart:
+                self.on_log("[%s] bỏ clear_cart (chưa bật xoá giỏ cũ)" % email)
+                return
+            self._clear_cart(session, email, value, selector, self.campaign_url)
         elif action == "fill":
             if step.get("only_if_empty") and self._current_value(page, selector):
                 self.on_log("[%s] giữ nguyên %s (site đã có dữ liệu)" % (email, selector))
@@ -373,6 +481,10 @@ class CampaignBrowserRunner:
                 return
             self._select(page, selector, value, timeout)
         elif action == "check":
+            guard = step.get("only_if_empty")
+            if isinstance(guard, str) and self._current_value(page, guard):
+                self.on_log("[%s] giữ nguyên %s (đã có dữ liệu)" % (email, guard))
+                return
             self._tick(session, selector, email)
         elif action == "click":
             self._click(page, selector, timeout)
@@ -498,3 +610,5 @@ def navigate_only(email, url, proxy_manager=None, headless=False, hold_seconds=0
         session.goto(url)
         session.page.wait_for_timeout(int(hold_seconds or 1500))
     return session
+
+

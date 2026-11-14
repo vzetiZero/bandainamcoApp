@@ -82,14 +82,17 @@ flags (`when`, `only_if_empty`, `optional`, `requires_submit`) and the phrases m
 *registered / already / closed / error*. Template variables: `{email}`, `{password}`, `{zip}`,
 `{pref}`, `{city}`, `{street}`, `{tel}`, `{card_number}`, …
 
-The shipped recipe is real for the 熊本店 OP-18 lottery: Parks2 login → item page → dismiss the
-本人確認書類 popup → pick the slot → add to cart → cart → `ご注文情報入力` → fill the address from
-the profile → **pause** (window stays open for you).
+The shipped recipe is real for the 熊本店 OP-18 lottery: Parks2 login → item page → optional
+cart clear → dismiss the 本人確認書類 popup → pick the slot → add to cart → cart →
+`ご注文情報入力` → fill the address from the account profile → then either **pause** (window stays
+open for you) or, with *Tự bấm gửi* on, click 入力内容を確認する → 注文する and wait for `ご注文完了`.
+A proxy that gets IP-blocked is marked resting and the next one is tried automatically.
 
 ```powershell
 python browser_campaign.py --check
 python browser_campaign.py --run --email you@example.com --campaign "<name>" --hold-open
-python browser_campaign.py --all --campaign "<name>" --slot 159016_1121_1330_1 --hold-open
+python browser_campaign.py --all --campaign "<name>" --slot 159016_1121_1330_1 --submit --clear-cart
+python browser_campaign.py --run --email you@example.com --url "<item url>" --no-proxy
 ```
 
 Edit the recipe from **Settings → Recipe (JSON)** in the app (the API validates before writing) or
@@ -113,3 +116,4 @@ changes.
   with 「メールアドレス…が間違っている」.
 - Automating sign-ups for many accounts may violate NAMCO Parks' terms of service and can get
   accounts or IPs blocked — use at your own risk.
+

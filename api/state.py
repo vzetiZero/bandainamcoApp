@@ -187,6 +187,16 @@ class ApiState:
         )
         self.max_workers = max(1, min(MAX_CONCURRENCY,
                                       self.settings.get_int("max_workers", DEFAULT_CONCURRENCY)))
+        # Nạp proxy đã lưu vào proxy_manager NGAY khi khởi động: thiếu bước này thì
+        # sau mỗi lần restart, proxy trong cấu hình bị bỏ qua (request đi bằng IP máy).
+        self.apply_proxy_settings()
+        self.apply_browser_settings()
+        proxy_state = self.proxy_settings()
+        if proxy_state["enabled"]:
+            self.log("Proxy: %d proxy, chế độ %s" % (proxy_state["count"],
+                                                     proxy_state["mode"]))
+        else:
+            self.log("Proxy: tắt (request dùng IP máy)")
         # Log của proxy_manager và của lần chạy trình duyệt đều đổ về buffer.
         set_event_sink(lambda message: self.log(message))
         self.log("API sẵn sàng — dữ liệu: %s" % data_file)
@@ -396,7 +406,7 @@ class ApiState:
     # JOB: chạy chiến dịch bằng Chrome
     # ============================================================
     def start_browser_run(self, campaign, emails, submit=None, slot="", url_override="",
-                          use_account_address=False):
+                          use_account_address=False, clear_cart=False, use_proxy=None):
         """`campaign` là dict có name/url (dựng từ UI); emails lấy mật khẩu trong kho."""
         targets = []
         for email in emails:
@@ -418,6 +428,17 @@ class ApiState:
         self.apply_browser_settings()
         total = len(targets)
 
+        # Cửa sổ cũ của chính tài khoản đó (đang pause) phải đóng trước: Chrome chỉ cho
+        # một tiến trình giữ mỗi profile, nếu không sẽ báo "Opening in existing session".
+        for email, _password in targets:
+            session = self.browser.open_sessions.pop(email, None)
+            if session is not None:
+                try:
+                    session.close()
+                except Exception:  # noqa: BLE001 - đóng không được thì bỏ qua
+                    pass
+                self.log("[%s] đóng cửa sổ Chrome cũ (profile đang bị giữ)" % email)
+
         # Địa chỉ của từng tài khoản lấy từ hồ sơ Parks2 đã đọc (mỗi người một địa chỉ).
         profile_for = self.account_checkout_vars if use_account_address else None
 
@@ -426,13 +447,15 @@ class ApiState:
                 job.items.append({"email": result.email, "ok": bool(result.ok),
                                   "message": result.message, "status": result.status,
                                   "screenshot": result.screenshot,
-                                  "url": result.final_url})
+                                  "url": result.final_url,
+                                  "proxy": result.details.get("proxy", "")})
                 job.done += 1
 
             results = self.browser.run(
                 campaign, targets, on_log=lambda message: self.logs.add(message),
                 on_result=on_result, should_stop=lambda: job._stop,
-                submit=submit, recipe=recipe, profile_for=profile_for)
+                submit=submit, recipe=recipe, profile_for=profile_for,
+                clear_cart=clear_cart, use_proxy=use_proxy)
             ok_count = sum(1 for result in results if result.ok)
             paused = [result.email for result in results if result.keep_open]
             job.message = "%d/%d xong%s" % (
@@ -477,4 +500,5 @@ def default_state() -> ApiState:
         settings_file=_os.environ.get("SETTINGS_FILE", WEB_SETTINGS_FILE),
         recipe_path=_os.environ.get("RECIPE_FILE", BROWSER_RECIPE_FILE),
     )
+
 

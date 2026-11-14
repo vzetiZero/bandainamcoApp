@@ -165,7 +165,9 @@ def command_run(args):
     results = service.run(campaign, targets, on_log=log,
                           on_progress=lambda done, total: print("  ... %d/%d" % (done, total)),
                           on_result=on_result, submit=args.submit,
-                          keep_open_seconds=args.keep_open, recipe=recipe)
+                          keep_open_seconds=args.keep_open, recipe=recipe,
+                          clear_cart=args.clear_cart,
+                          use_proxy=False if args.no_proxy else None)
     ok_count = sum(1 for result in results if result.ok)
     print("\n" + "=" * 60)
     print("Tổng %d tài khoản: %d thành công, %d lỗi" % (len(results), ok_count,
@@ -213,6 +215,10 @@ def main():
     parser.add_argument("--hold-open", action="store_true",
                         help="Sau khi chạy, giữ tiến trình sống để cửa sổ Chrome ở bước "
                              "thanh toán không bị đóng (Ctrl+C để đóng)")
+    parser.add_argument("--clear-cart", action="store_true",
+                        help="Xoá các dòng đang có trong giỏ trước khi thêm slot mới")
+    parser.add_argument("--no-proxy", action="store_true",
+                        help="Chạy bằng IP máy dù proxy đang bật trong cấu hình")
     parser.add_argument("--slot", help="Mã ngày/giờ nhận hàng, vd 159016_1121_1100_1 "
                                        "(ghi đè bước chọn 種類 trong recipe)")
     parser.add_argument("--hold", type=int, default=3,
@@ -232,4 +238,5 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
 

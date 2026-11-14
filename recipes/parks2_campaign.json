@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "parks2_kumamoto_op18",
   "_note": "Recipe thật, dò từ site ngày 2026-11-14. Luồng: login form Parks2 -> trang item -> đóng popup 本人確認 -> chọn 種類/数量 -> カートに入れる -> 購入手続きに進む -> cart_index -> cart_seisan (ご注文情報入力) -> PAUSE (để người dùng tự điền địa chỉ/thanh toán). Đổi ngày giờ nhận hàng ở bước 'chọn ngày/giờ' (PRIORITY_ITEMPROPERTY_CD_MATRIX_0) hoặc dùng --slot ở CLI.",
   "login": {
@@ -44,6 +44,12 @@
   },
   "entry": {
     "steps": [
+      {
+        "name": "xoá giỏ cũ (khi đổi khung giờ)",
+        "action": "clear_cart",
+        "value": "https://parks2.bandainamco-am.co.jp/cart_index.html",
+        "selector": "a[onclick*=\"'delete'\"]"
+      },
       {
         "name": "đóng popup 本人確認書類 (tick 内容確認しました rồi bấm 閉じる)",
         "action": "dismiss",
@@ -185,7 +191,7 @@
       {
         "name": "số nhà (丁目・番地)",
         "action": "fill",
-        "selector": "#ORDER_H.FREE_ITEM12",
+        "selector": "input[name=\"ORDER_H.FREE_ITEM12\"]",
         "value": "{street}",
         "when": "{street}",
         "only_if_empty": true,
@@ -194,17 +200,17 @@
       {
         "name": "toà nhà / số phòng",
         "action": "fill",
-        "selector": "#ADDR3",
+        "selector": "input[name=\"ADDR3\"]",
         "value": "{building}",
         "when": "{building}",
         "only_if_empty": true,
         "optional": true
       },
       {
-        "name": "tick ビル・マンション名・部屋番号なし",
+        "name": "tick ビル・マンション名・部屋番号なし (khi chưa có tên toà nhà)",
         "action": "check",
         "selector": "input[name=\"ORDER_H.FREE_ITEM22\"]",
-        "when": "{building_none}",
+        "only_if_empty": "input[name=\"ADDR3\"]",
         "optional": true
       },
       {
@@ -223,15 +229,52 @@
         "optional": true
       },
       {
-        "name": "dừng ở bước điền thông tin thanh toán (để cửa sổ lại cho người dùng)",
-        "action": "pause"
+        "name": "dừng ở bước thanh toán (chỉ khi TẮT tự bấm gửi)",
+        "action": "pause",
+        "unless_submit": true
+      },
+      {
+        "name": "sang trang xác nhận ご注文情報確認",
+        "action": "click",
+        "selector": "input[type=submit][value=\"入力内容を確認する\"]",
+        "requires_submit": true
+      },
+      {
+        "name": "chờ trang xác nhận",
+        "action": "wait_text",
+        "value": "ご注文情報確認",
+        "requires_submit": true,
+        "timeout": 25000
+      },
+      {
+        "name": "ảnh màn hình trang xác nhận",
+        "action": "screenshot",
+        "value": "confirm",
+        "requires_submit": true,
+        "optional": true
+      },
+      {
+        "name": "bấm 注文する (chốt đơn)",
+        "action": "submit",
+        "selector": "#order_now_btn",
+        "requires_submit": true
+      },
+      {
+        "name": "chờ trang ご注文完了",
+        "action": "wait_text",
+        "value": "ご注文完了",
+        "requires_submit": true,
+        "timeout": 30000,
+        "optional": true
       }
     ]
   },
   "verification": {
-    "success_text": ["ご注文完了", "お申し込みを受け付けました", "受付が完了"],
-    "already_text": ["すでにお申し込み", "既にお申し込み", "重複"],
-    "closed_text": ["受付期間外", "受付を終了"],
-    "error_text": ["エラーが発生", "アクセスが集中"]
+    "success_text": ["ご注文完了", "ご注文ありがとうございました", "注文を承りました", "受付が完了"],
+    "already_text": ["すでにお申し込み", "既にお申し込み", "重複", "購入済み"],
+    "closed_text": ["受付期間外", "受付を終了", "販売期間外"],
+    "error_text": ["エラーが発生", "アクセスが集中", "画面操作の誤り"]
   }
 }
+
+

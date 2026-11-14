@@ -23,6 +23,8 @@ export default function CampaignsPage() {
   const [slot, setSlot] = useState('')
   const [submitEnabled, setSubmitEnabled] = useState(false)
   const [useAccountAddress, setUseAccountAddress] = useState(true)
+  const [clearCart, setClearCart] = useState(false)
+  const [useProxy, setUseProxy] = useState(true)
 
   const { job, track } = useJob(() => {
     campaigns.reload()
@@ -109,6 +111,8 @@ export default function CampaignsPage() {
         submit: submitEnabled,
         slot,
         use_account_address: useAccountAddress,
+        clear_cart: clearCart,
+        use_proxy: useProxy,
       })
       track(started)
       setMessage(`Đang chạy cho ${targets.length} tài khoản`)
@@ -167,6 +171,7 @@ export default function CampaignsPage() {
                     <StatusBadge status={item.status || (item.ok ? 'ok' : 'error')} />
                     <Text sx={{ minWidth: 200 }}>{item.email}</Text>
                     <Text sx={{ color: 'muted', flex: 1 }}>{item.message}</Text>
+                    {item.proxy && <Text sx={{ color: 'muted', fontSize: 0 }}>{item.proxy}</Text>}
                   </Flex>
                 ))}
               </Box>
@@ -290,10 +295,22 @@ export default function CampaignsPage() {
                 hint="Địa chỉ lấy từ hồ sơ Parks2 đã đọc của chính tài khoản đó; hồ sơ chung chỉ dùng cho phần còn thiếu và thẻ."
               />
               <CheckField
-                label="Tự bấm gửi (submit)"
+                label="Xoá giỏ cũ trước khi thêm slot"
+                checked={clearCart}
+                onChange={(event) => setClearCart(event.target.checked)}
+                hint="Bật khi đổi khung giờ: giỏ Parks2 giữ theo tài khoản, không xoá thì đơn sẽ gồm cả dòng slot cũ."
+              />
+              <CheckField
+                label="Dùng proxy (proxy.txt)"
+                checked={useProxy}
+                onChange={(event) => setUseProxy(event.target.checked)}
+                hint="Tắt để chạy bằng IP máy. Khi bật, proxy lỗi/chặn IP sẽ tự thử proxy kế tiếp."
+              />
+              <CheckField
+                label="Tự bấm gửi (chốt đơn thật)"
                 checked={submitEnabled}
                 onChange={(event) => setSubmitEnabled(event.target.checked)}
-                hint="Recipe hiện tại dừng ở bước thanh toán nên tuỳ chọn này chỉ có tác dụng khi recipe có action submit."
+                hint="BẬT = app bấm 入力内容を確認する → 注文する: đơn 抽選 được gửi thật, không huỷ được. TẮT = dừng ở trang ご注文情報入力 để bạn tự kiểm tra."
               />
               <Text sx={{ display: 'block', fontSize: 1, color: 'muted', mb: 2 }}>
                 Tài khoản ({runEmails.length ? `${runEmails.length} chọn` : 'mặc định: tất cả chưa lỗi'})
@@ -351,4 +368,5 @@ export default function CampaignsPage() {
     </Box>
   )
 }
+
 

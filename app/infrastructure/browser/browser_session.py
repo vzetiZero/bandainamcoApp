@@ -1,4 +1,4 @@
-"""Một cửa sổ Chrome riêng cho một tài khoản (Playwright + CDP).
+﻿"""Một cửa sổ Chrome riêng cho một tài khoản (Playwright + CDP).
 
 Mỗi tài khoản cần **profile, proxy và cổng debug riêng** thì mới đăng nhập song
 song được mà không giẫm cookie của nhau. Lớp này gói ba việc đó:
@@ -14,6 +14,7 @@ tài khoản), MCP chỉ dùng để dò/chẩn đoán.
 import os
 import re
 import socket
+import time
 
 from app.config import (
     BROWSER_ACTION_TIMEOUT, BROWSER_CDP_BASE_PORT, BROWSER_NAV_TIMEOUT,
@@ -148,10 +149,26 @@ class BrowserSession:
                 launch["executable_path"] = self.chrome_path
             else:
                 launch["channel"] = "chrome"
-            self._context = self._playwright.chromium.launch_persistent_context(**launch)
+            try:
+                self._context = self._playwright.chromium.launch_persistent_context(
+                    **launch)
+            except Exception as exc:  # noqa: BLE001
+                # Cửa sổ cũ còn giữ profile: chờ nó thoát rồi thử lại một lần.
+                if "existing browser session" not in str(exc).lower():
+                    raise
+                self.on_log("%s: profile đang bị cửa sổ cũ giữ, chờ 4s rồi mở lại"
+                            % self.email)
+                time.sleep(4)
+                self._context = self._playwright.chromium.launch_persistent_context(
+                    **launch)
         except Exception as exc:  # noqa: BLE001 - Playwright ném nhiều loại lỗi
             self.close()
-            raise BrowserStartError("Không mở được Chrome cho %s: %s" % (self.email, exc)) from exc
+            message = str(exc)
+            if "existing browser session" in message.lower():
+                message = ("profile của %s đang bị cửa sổ Chrome khác giữ — đóng cửa sổ đó "
+                           "(hoặc bấm Đóng tất cả) rồi chạy lại" % self.email)
+            raise BrowserStartError("Không mở được Chrome cho %s: %s"
+                                    % (self.email, message)) from exc
         self._context.set_default_timeout(BROWSER_ACTION_TIMEOUT)
         self._context.set_default_navigation_timeout(BROWSER_NAV_TIMEOUT)
         pages = self._context.pages
@@ -214,3 +231,4 @@ class BrowserSession:
         except Exception as exc:  # noqa: BLE001
             self.on_log("Chụp ảnh lỗi: %s" % exc)
             return ""
+

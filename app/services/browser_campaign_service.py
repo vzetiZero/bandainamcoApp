@@ -1,4 +1,4 @@
-"""Use case: chạy đăng ký chiến dịch bằng trình duyệt cho nhiều tài khoản.
+﻿"""Use case: chạy đăng ký chiến dịch bằng trình duyệt cho nhiều tài khoản.
 
 Service này là cầu nối duy nhất giữa UI/worker và hạ tầng trình duyệt:
 - đọc recipe và báo trước (không mở Chrome) khi recipe còn nháp;
@@ -77,7 +77,8 @@ class BrowserCampaignService:
     # ---------------- chạy ----------------
     def run(self, campaign, accounts, on_log=None, on_progress=None, on_result=None,
             should_stop=None, submit=None, keep_open_seconds=0,
-            on_account_progress=None, recipe=None, profile_for=None):
+            on_account_progress=None, recipe=None, profile_for=None, clear_cart=False,
+            use_proxy=None):
         """Chạy cho `accounts` = [(email, password)].
 
         `submit=None` dùng giá trị của service; `on_result(BrowserRunResult)` được
@@ -125,9 +126,11 @@ class BrowserCampaignService:
                     log("Không lấy được hồ sơ riêng của %s: %s" % (email, exc))
             runner = CampaignBrowserRunner(
                 recipe=recipe, submit=submit, headless=self.headless,
-                proxy_manager=self.proxy_manager, chrome_path=self.chrome_path,
-                on_log=log, keep_open_seconds=keep_open_seconds,
-                on_keep_open=self._keep_open, card=account_card)
+                # use_proxy=False: chạy bằng IP máy dù proxy đang bật trong cấu hình.
+                proxy_manager=self.proxy_manager if use_proxy is not False else None,
+                chrome_path=self.chrome_path, on_log=log,
+                keep_open_seconds=keep_open_seconds, on_keep_open=self._keep_open,
+                card=account_card, clear_cart=clear_cart)
             report = (lambda percent: on_account_progress(email, percent)
                       if on_account_progress else None)
             return runner.run(email, password, campaign.get("url", ""),
@@ -199,3 +202,4 @@ class BrowserCampaignService:
                 pass
             self.open_sessions.pop(email, None)
         return count
+

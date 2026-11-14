@@ -51,9 +51,19 @@ Electron window (web/out) ──HTTP/JSON──> api/ (FastAPI) ──> app/serv
 `recipes/parks2_campaign.json` — 4 khối: `name`, `login`, `entry`, `verification`.
 
 Bước (`entry.steps` / `login.steps`) là object: `action` ∈ `goto, fill, select, check, click,
-press, wait_text, wait_selector, sleep, screenshot, dismiss, pause, submit`, kèm `selector`,
-`value`, và các cờ `when` (chỉ chạy khi biến có giá trị), `only_if_empty` (không ghi đè dữ liệu
-site đã có), `optional`, `requires_submit`.
+press, wait_text, wait_selector, sleep, screenshot, dismiss, clear_cart, pause, submit`, kèm
+`selector`, `value`, và các cờ:
+
+| Cờ | Ý nghĩa |
+|---|---|
+| `when` | chỉ chạy khi biến có giá trị (rỗng/0/false ⇒ bỏ bước) |
+| `only_if_empty` | `true` = không ghi đè ô của chính nó; **selector** = chỉ chạy khi ô đó đang trống (dùng cho `check`) |
+| `optional` | lỗi thì bỏ qua bước, không dừng lượt chạy |
+| `requires_submit` | chỉ chạy khi bật **Tự bấm gửi** |
+| `unless_submit` | chỉ chạy khi **TẮT** tự bấm gửi (dùng cho `pause`) |
+
+`clear_cart` xoá các dòng đang có trong giỏ (`value` = URL giỏ, `selector` = nút xoá) rồi quay
+lại trang chiến dịch — cần khi đổi 種類 để đơn không thành 2 dòng.
 
 Biến dùng trong `selector`/`value`: `{email}`, `{password}`, `{l_name}`, `{f_name}`, `{l_kana}`,
 `{f_kana}`, `{zip}`, `{pref}`, `{city}`, `{street}`, `{building}`, `{building_none}`, `{tel}`,
@@ -62,10 +72,25 @@ Biến dùng trong `selector`/`value`: `{email}`, `{password}`, `{l_name}`, `{f_
 `validate_recipe()` chặn action sai, thiếu trường và placeholder (`TODO`, `<` trong selector).
 Sửa file qua panel Settings → Recipe JSON (API validate trước khi ghi) hoặc bằng tay.
 
-Luồng hiện tại của 熊本店 OP-18: login Parks2 → trang item → `dismiss` popup 本人確認
-(`#confirmCheck` + `#closePopupButton`) → `select #PRIORITY_ITEMPROPERTY_CD_MATRIX_0`
-(`159016_1121_1100_1` = 11/21 11:00) → `#CART_AMOUNT_0` → `#addCart` → 購入手続きに進む →
-`a[onclick*="cart_seisan.html"]` → ご注文情報入力 → điền địa chỉ theo hồ sơ → **`pause`**.
+Luồng hiện tại của 熊本店 OP-18 (đã chạy thật tới ご注文完了):
+
+```
+login Parks2 → trang item
+→ clear_cart (nếu bật — xoá dòng giỏ cũ khi đổi 種類)
+→ dismiss popup 本人確認 (#confirmCheck + #closePopupButton)
+→ select #PRIORITY_ITEMPROPERTY_CD_MATRIX_0 (mặc định 159016_1121_1100_1 = 11/21 11:00)
+→ #CART_AMOUNT_0 → #addCart → 購入手続きに進む → a[onclick*="cart_seisan.html"]
+→ ご注文情報入力: điền họ tên/zip/pref/city/street/tel (chỉ ô trống, theo hồ sơ tài khoản);
+   tick 「ビル・マンション名・部屋番号なし」 khi ô ビル名 trống
+→ pause  (chỉ khi TẮT tự bấm gửi)
+→ click 入力内容を確認する → wait ご注文情報確認
+→ submit #order_now_btn (注文する) → wait ご注文完了
+```
+
+Lưu ý selector: id có dấu chấm của Interfactory (`ORDER_H.FREE_ITEM12`) **không dùng được** làm
+CSS id (`.` = class) — dùng `input[name="ORDER_H.FREE_ITEM12"]`. Checkbox 「なし」 là
+`input[name="ORDER_H.FREE_ITEM22"]`, ô ビル名 là `input[name="ADDR3"]`.
+Kết quả thật 2026-11-14 (qua proxy): trinha5 → ご注文完了, 注文番号 EC-2108582488.
 
 ## 5. Trình duyệt (Playwright + chrome-devtools-mcp)
 
@@ -77,6 +102,14 @@ Luồng hiện tại của 熊本店 OP-18: login Parks2 → trang item → `dis
   tối đa 3 cửa sổ chờ (`max_paused`).
 - `chrome-devtools-mcp` gắn vào cùng cổng (`--browser-url`) chỉ để **dò trang/snapshot/chẩn đoán**;
   flow chạy hàng loạt dùng selector CSS ổn định.
+- **Proxy**: `ApiState.__init__` gọi `apply_proxy_settings()` nên cấu hình proxy có hiệu lực ngay
+  sau restart (trước đây phải PUT lại mới ăn). Mỗi lượt chạy lấy proxy qua
+  `ProxyManager.next_proxy_entry()`; `use_proxy=false` để chạy bằng IP máy. Gặp chặn IP
+  (`UnexpectedRemoteAddress`) hoặc trang không tải được ⇒ `mark_blocked` + **thử proxy kế tiếp**
+  (tối đa 2 lần), hết lượt thì `status=ip_blocked`. Proxy đã dùng được ghi vào job item.
+- Cửa sổ Chrome cũ của cùng tài khoản phải đóng trước khi mở lại (Chrome khoá profile):
+  `start_browser_run` tự đóng session đang pause của chính tài khoản đó, và `BrowserSession`
+  chờ 4s + thử lại một lần nếu gặp "Opening in existing browser session".
 - Ảnh chụp + HTML dò được lưu ở `browser_artifacts/` (git-ignored).
 - Trang Parks2 lặp phần tử desktop/mobile cùng `id` (một bản ẩn) ⇒ engine bấm/điền **phần tử đang hiện**.
 
@@ -131,3 +164,4 @@ python server.py --help    # --port, --kill-port/--no-kill-port, --pick-port
 5. `submit` mặc định phải qua xác nhận của người dùng; recipe hiện dừng ở `pause` trước khi chốt đơn.
 6. API không trả mật khẩu/thẻ/CVV; log chỉ in `checkout.summary()` (đã che).
 7. UI gọn: giải thích đặt ở tooltip, nhãn trạng thái 1 dòng, kết quả dùng toast/status chứ không popup.
+
